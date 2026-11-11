@@ -1,23 +1,25 @@
-from django.http import JsonResponse
+from django.conf import settings
+from django.contrib import admin
 from django.urls import path
-from django.views.decorators.http import require_GET
 
-LOCAL_CLIENTS = {
-    "http://127.0.0.1:1420",
-    "http://127.0.0.1:4173",
-    "http://tauri.localhost",
-}
+from . import api, groups
 
+urlpatterns = [
+    path("admin/", admin.site.urls),
+    path("api/health/", api.health),
+    path("api/session/", api.session),
+    path("api/login/", api.sign_in),
+    path("api/logout/", api.sign_out),
+    path("api/register/", api.register),
+    path("api/profile/", api.profile),
+    path("api/groups/", groups.groups),
+    path("api/groups/<int:group_id>/", groups.group_detail),
+    path("api/groups/<int:group_id>/invitation/", groups.invitation),
+    path("api/groups/<int:group_id>/members/<int:membership_id>/", groups.membership),
+    path("api/join/", groups.join),
+    path("api/memberships/", groups.memberships),
+    path("api/review/", api.release_review),
+]
 
-@require_GET
-def health(request):
-    response = JsonResponse({"service": "postup", "status": "ok", "version": "0.1.0"})
-    response.headers["Cache-Control"] = "no-store"
-    response.headers["Vary"] = "Origin"
-    origin = request.headers.get("Origin")
-    if origin in LOCAL_CLIENTS:
-        response.headers["Access-Control-Allow-Origin"] = origin
-    return response
-
-
-urlpatterns = [path("api/health/", health)]
+if settings.SERVE_WEB:
+    urlpatterns.append(path("", api.student_site))

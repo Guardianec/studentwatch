@@ -1,0 +1,48 @@
+name: Pilot checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: local-ci
+          POSTGRES_DB: postup
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v6
+      - run: docker build -t postup-ci .
+      - name: Check migrations and run Django tests
+        env:
+          POSTUP_DATABASE_URL: postgresql://postgres:local-ci@127.0.0.1:5432/postup
+        run: |
+          docker run --rm --network host -e POSTUP_DATABASE_URL postup-ci python server/manage.py makemigrations --check --dry-run
+          docker run --rm --network host -e POSTUP_DATABASE_URL postup-ci python server/manage.py test postup
+      - name: Check the built site and database connection
+        env:
+          POSTUP_DATABASE_URL: postgresql://postgres:local-ci@127.0.0.1:5432/postup
+        run: |
+          docker run --rm --detach --network host --name postup-ci-web -e POSTUP_DATABASE_URL postup-ci
+          trap 'docker rm --force postup-ci-web >/dev/null 2>&1 || true' EXIT
+          curl --fail --silent --show-error --retry 15 --retry-connrefused --retry-delay 1 http://127.0.0.1:10000/api/health/ >/dev/null
+          curl --fail --silent --show-error http://127.0.0.1:10000/api/session/ >/dev/null
+          html=$(curl --fail --silent --show-error http://127.0.0.1:10000/)
+          asset=$(printf '%s\n' "$html" | grep -oE '/assets/[^"]+\.js' | head -1)
+          test -n "$asset"
+          curl --fail --silent --show-error "http://127.0.0.1:10000${asset}" >/dev/null
+          curl --fail --silent --show-error http://127.0.0.1:10000/static/admin/css/base.css >/dev/null
