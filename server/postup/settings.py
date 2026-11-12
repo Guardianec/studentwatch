@@ -50,6 +50,9 @@ if database_url:
         raise ImproperlyConfigured("Production PostgreSQL requires TLS")
     DATABASES = {"default": {**database, "OPTIONS": parameters}}
 elif os.getenv("POSTUP_DB_NAME"):
+    sslmode = os.getenv("POSTUP_DB_SSLMODE") or ("require" if PRODUCTION else "prefer")
+    if PRODUCTION and sslmode not in ("require", "verify-ca", "verify-full"):
+        raise ImproperlyConfigured("Production PostgreSQL requires TLS")
     DATABASES = {"default": {
         "ENGINE": "django.db.backends.postgresql",
         "NAME": os.environ["POSTUP_DB_NAME"],
@@ -57,7 +60,7 @@ elif os.getenv("POSTUP_DB_NAME"):
         "PASSWORD": os.environ["POSTUP_DB_PASSWORD"],
         "HOST": os.getenv("POSTUP_DB_HOST", "127.0.0.1"),
         "PORT": os.getenv("POSTUP_DB_PORT", "5432"),
-        "OPTIONS": {"sslmode": os.getenv("POSTUP_DB_SSLMODE") or ("require" if PRODUCTION else "prefer")},
+        "OPTIONS": {"sslmode": sslmode},
     }}
 elif PRODUCTION:
     raise ImproperlyConfigured("Production requires PostgreSQL")
@@ -119,6 +122,30 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 STATIC_URL = "/static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
 DATA_UPLOAD_MAX_MEMORY_SIZE = 64 * 1024
+DATA_UPLOAD_MAX_NUMBER_FILES = 1
+FILE_UPLOAD_MAX_MEMORY_SIZE = 512 * 1024
+
+
+def positive_setting(name, default, maximum):
+    try:
+        value = int(os.getenv(name) or default)
+    except ValueError:
+        value = 0
+    if not 1 <= value <= maximum:
+        raise ImproperlyConfigured(f"{name} must be between 1 and {maximum}")
+    return value
+
+
+ATTACHMENT_BYTES = positive_setting("POSTUP_ATTACHMENT_MB", 10, 10) * 1024**2
+ATTACHMENT_COUNT = positive_setting("POSTUP_ATTACHMENT_COUNT", 3, 10)
+ATTACHMENT_QUOTA = positive_setting("POSTUP_ATTACHMENT_QUOTA_MB", 100, 1024) * 1024**2
+ATTACHMENT_PIXELS = positive_setting("POSTUP_ATTACHMENT_PIXELS", 12_000_000, 16_000_000)
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "handlers": {"discard": {"class": "logging.NullHandler"}},
+    "loggers": {"pypdf": {"handlers": ["discard"], "propagate": False}},
+}
 
 SESSION_COOKIE_NAME = "postup_session"
 SESSION_COOKIE_AGE = 12 * 60 * 60

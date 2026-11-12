@@ -3,7 +3,7 @@ import { Eye, EyeOff } from 'lucide-react'
 import { ApiFailure, authenticate, desktop, session, signOut, type User } from './api'
 import Student from './Student'
 import Teacher from './Teacher'
-import { asFailure, ErrorNotice, FieldError, useAction } from './ui'
+import { asFailure, canLeave, ErrorNotice, FieldError, useAction } from './ui'
 
 const pendingLogout = 'postup-logout-pending'
 const inviteKey = 'postup-invitation'
@@ -166,6 +166,7 @@ export default function App() {
   }
 
   async function logout() {
+    if (!canLeave()) return
     setUser(null)
     setLoading(true)
     setNotice(undefined)

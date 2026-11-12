@@ -2,7 +2,7 @@ from django.conf import settings
 from django.contrib import admin
 from django.urls import path
 
-from . import api, groups
+from . import api, attachments, groups, portfolio
 
 urlpatterns = [
     path("admin/", admin.site.urls),
@@ -11,7 +11,17 @@ urlpatterns = [
     path("api/login/", api.sign_in),
     path("api/logout/", api.sign_out),
     path("api/register/", api.register),
-    path("api/profile/", api.profile),
+    path("api/profile/", portfolio.my_profile),
+    path("api/students/<int:student_id>/profile/", portfolio.student_profile),
+    path("api/catalogue/", portfolio.catalogue),
+    path("api/achievements/", portfolio.achievements),
+    path("api/achievements/<uuid:record_id>/", portfolio.achievement),
+    path("api/achievements/<uuid:record_id>/submit/", portfolio.submit),
+    path("api/achievements/<uuid:record_id>/withdraw/", portfolio.withdraw),
+    path("api/achievements/<uuid:record_id>/evidence/", portfolio.evidence),
+    path("api/achievements/<uuid:record_id>/attachments/", attachments.upload),
+    path("api/achievements/<uuid:record_id>/attachments/<uuid:attachment_id>/", attachments.remove),
+    path("api/achievements/<uuid:record_id>/attachments/<uuid:attachment_id>/download/", attachments.download),
     path("api/groups/", groups.groups),
     path("api/groups/<int:group_id>/", groups.group_detail),
     path("api/groups/<int:group_id>/invitation/", groups.invitation),

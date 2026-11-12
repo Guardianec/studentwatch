@@ -1,18 +1,37 @@
 import { useState } from 'react'
 import { RefreshCw } from 'lucide-react'
 import { academicYear, api, type InvitePreview, type Membership, type User } from './api'
-import { ErrorNotice, FieldError, MemberBadge, useAction, useResource } from './ui'
+import { StudentProfile } from './Profile'
+import StudentAchievements from './StudentAchievements'
+import { canLeave, ErrorNotice, FieldError, MemberBadge, useAction, useResource } from './ui'
 
 export default function Student({ user, update, invite, setInvite }: {
   user: User; update: (user: User) => void; invite: string; setInvite: (code: string) => void
 }) {
+  const pages = { groups: 'Мої групи', profile: 'Мій профіль', achievements: 'Мої досягнення' }
+  const [page, setPage] = useState<keyof typeof pages>('groups')
+  function navigate(next: typeof page) {
+    if (page !== next && canLeave()) {
+      setPage(next)
+      window.scrollTo(0, 0)
+    }
+  }
+  return <main className="standard-page student-page">
+    <nav className="student-nav" aria-label="Кабінет учня">
+      {(Object.keys(pages) as (keyof typeof pages)[]).map((id) => <button key={id}
+        aria-current={page === id ? 'page' : undefined} type="button" onClick={() => navigate(id)}>{pages[id]}</button>)}
+    </nav>
+    {page === 'groups' && <StudentGroups invite={invite} setInvite={setInvite} />}
+    {page === 'profile' && <StudentProfile user={user} update={update} />}
+    {page === 'achievements' && <StudentAchievements openGroups={() => navigate('groups')} />}
+  </main>
+}
+
+function StudentGroups({ invite, setInvite }: { invite: string; setInvite: (code: string) => void }) {
   const groups = useResource<{ memberships: Membership[] }>('/api/memberships/')
   const joining = useAction()
-  const editing = useAction()
   const [preview, setPreview] = useState<{ code: string; result: InvitePreview }>()
   const found = preview?.code === invite ? preview.result : undefined
-  const [name, setName] = useState(user.full_name)
-  const [saved, setSaved] = useState(false)
   const [submitted, setSubmitted] = useState(false)
 
   async function lookup(submit: boolean) {
@@ -27,7 +46,7 @@ export default function Student({ user, update, invite, setInvite }: {
     }
   }
 
-  return <main className="standard-page student-page">
+  return <>
     <header className="page-heading"><h1>Мої групи</h1><p>Запрошення та статуси ваших заявок.</p></header>
     <section aria-labelledby="join-title" className="student-section">
       <div className="section-heading"><h2 id="join-title">Приєднатися до групи</h2></div>
@@ -74,29 +93,5 @@ export default function Student({ user, update, invite, setInvite }: {
       </ul>
     </section>
 
-    <section aria-labelledby="profile-title" className="student-section">
-      <div className="section-heading"><h2 id="profile-title">Мій профіль</h2></div>
-      <p className="hint">Логін · {user.username}</p>
-      <form className="form" onSubmit={(event) => {
-        event.preventDefault()
-        setSaved(false)
-        void editing.run(async () => {
-          const result = await api<{ user: User }>('/api/profile/', 'POST', { full_name: name })
-          update(result.user)
-          setName(result.user.full_name)
-          setSaved(true)
-        })
-      }}>
-        <label>ПІБ
-          <input value={name} onChange={(event) => { setName(event.target.value); setSaved(false) }} maxLength={120}
-            required autoComplete="name" aria-invalid={Boolean(editing.error?.fields.full_name)}
-            aria-describedby={editing.error?.fields.full_name ? 'profile-name-error' : undefined} />
-          <FieldError id="profile-name-error" message={editing.error?.fields.full_name} />
-        </label>
-        <ErrorNotice error={editing.error} />
-        <button className="control" type="submit" disabled={editing.busy}>{editing.busy ? 'Зберігаємо…' : 'Зберегти профіль'}</button>
-        {saved && <p role="status">Профіль оновлено.</p>}
-      </form>
-    </section>
-  </main>
+  </>
 }

@@ -6,6 +6,7 @@ use keyring::Entry;
 use reqwest::{header, Method, Url};
 use serde::Serialize;
 use serde_json::Value;
+use tauri::ipc::Response;
 use tauri::{State, WebviewWindowBuilder};
 use tokio::sync::Mutex;
 
@@ -65,15 +66,61 @@ async fn api_request(
     body: Option<Value>,
     csrf: Option<String>,
 ) -> Result<ApiResponse, &'static str> {
+    let response = send(&transport, &path, &method, body, csrf).await?;
+    let status = response.status().as_u16();
+    let bytes = response.bytes().await.map_err(|_| "network")?;
+    Ok(ApiResponse {
+        status,
+        data: serde_json::from_slice(&bytes).ok(),
+    })
+}
+
+#[tauri::command]
+async fn api_download(
+    transport: State<'_, Transport>,
+    path: String,
+) -> Result<Response, &'static str> {
+    const MAX_BYTES: usize = 10 * 1024 * 1024;
+    if !path.starts_with("/api/achievements/") || !path.ends_with("/download/") {
+        return Err("request");
+    }
+    let mut response = send(&transport, &path, "GET", None, None).await?;
+    match response.status().as_u16() {
+        200 => (),
+        401 => return Err("session"),
+        403 | 404 => return Err("missing"),
+        _ => return Err("network"),
+    }
+    let length = response
+        .content_length()
+        .filter(|size| *size <= MAX_BYTES as u64)
+        .ok_or("request")?;
+    let mut bytes = Vec::with_capacity(length as usize);
+    while let Some(chunk) = response.chunk().await.map_err(|_| "network")? {
+        if bytes.len() + chunk.len() > MAX_BYTES {
+            return Err("request");
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    Ok(Response::new(bytes))
+}
+
+async fn send(
+    transport: &Transport,
+    path: &str,
+    method: &str,
+    body: Option<Value>,
+    csrf: Option<String>,
+) -> Result<reqwest::Response, &'static str> {
     if !path.starts_with("/api/")
         || !path.ends_with('/')
         || !path
             .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'/')
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'/' | b'-'))
     {
         return Err("request");
     }
-    let method = match method.as_str() {
+    let method = match method {
         "GET" => Method::GET,
         "POST" => Method::POST,
         "PUT" => Method::PUT,
@@ -82,7 +129,7 @@ async fn api_request(
         _ => return Err("request"),
     };
     let mut url = transport.origin.clone();
-    url.set_path(&path);
+    url.set_path(path);
     let mut request = transport
         .http
         .request(method, url)
@@ -93,6 +140,9 @@ async fn api_request(
         .header(header::ACCEPT, "application/json");
     if transport.origin.scheme() == "https" && path == "/api/session/" {
         request = request.timeout(Duration::from_secs(90));
+    }
+    if path.ends_with("/download/") {
+        request = request.timeout(Duration::from_secs(60));
     }
     if let Some(data) = body {
         request = request.json(&data);
@@ -108,7 +158,6 @@ async fn api_request(
         Err(_) => return Err("storage"),
     }
     let response = request.send().await.map_err(|_| "network")?;
-    let status = response.status().as_u16();
     if let Some(cookie) = response
         .cookies()
         .find(|cookie| cookie.name() == SESSION_COOKIE)
@@ -119,11 +168,7 @@ async fn api_request(
             entry.set_password(cookie.value()).map_err(|_| "storage")?;
         }
     }
-    let bytes = response.bytes().await.map_err(|_| "network")?;
-    Ok(ApiResponse {
-        status,
-        data: serde_json::from_slice(&bytes).ok(),
-    })
+    Ok(response)
 }
 
 fn main() {
@@ -148,6 +193,7 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             api_request,
+            api_download,
             api_origin,
             forget_session
         ])

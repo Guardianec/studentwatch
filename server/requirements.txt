@@ -3,3 +3,5 @@ psycopg[binary]==3.3.8
 python-dotenv==1.2.4
 waitress==3.0.2
 whitenoise==6.12.0
+Pillow==13.0.0
+pypdf==7.0.1

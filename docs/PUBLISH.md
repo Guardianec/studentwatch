@@ -1,42 +1,26 @@
-# Перша публікація коду на GitHub
+# Оновлення «Поступу» на GitHub
 
-1. Увійдіть до GitHub і відкрийте [створення репозиторію](https://github.com/new). Виберіть назву, наприклад `studentwatch`, і видимість. Залиште репозиторій порожнім, щоб першим комітом був ваш локальний код. Скопіюйте HTTPS-адресу з екрана Quick Setup.
-2. Перейдіть у проєкт і перегляньте файли, які Git бачить для першого коміту.
+Відкрийте PowerShell у репозиторії й перевірте гілку, адресу та файли. Поточний remote `origin` вказує на `Guardianec/studentwatch`.
 
-   ```powershell
-   Set-Location 'C:\Users\User\Documents\ChatGPT\StudentWatch'
-   git status --short --untracked-files=all
-   ```
+```powershell
+Set-Location 'C:\Users\User\Documents\ChatGPT\StudentWatch'
+git status --short --branch
+git remote -v
+git diff --check
+```
 
-   Переконайтеся, що до списку не потрапили секрети, справжні учнівські записи, дипломи, база даних, `.venv`, `node_modules` або інсталятор.
+Перегляньте diff та нові файли. У коміт мають потрапити вихідний код, міграція, тести й документація. Секрети, база, дипломи, резервні копії та інсталятор зберігаються поза Git. Якщо Render підключено до `main`, перед відправленням перевірте параметри Neon і політику автодеплою. [Оновлення онлайн-пілоту](PILOT.md#оновлення-наявного-сервісу)
 
-3. Додайте файли, перегляньте вміст майбутнього коміту й створіть його.
+Для прямого оновлення `main` виконайте:
 
-   ```powershell
-   git add -- .
-   git diff --cached --stat
-   git diff --cached --check
-   git commit -m "Створити прототип Поступу 0.1.0"
-   ```
+```powershell
+git add -- .
+git diff --cached --stat
+git diff --cached --check
+git commit -m "Додати профілі, досягнення та приватні вкладення у 0.3.0"
+git push origin main
+```
 
-4. Назвіть гілку `main` і додайте HTTPS-адресу нового репозиторію. Замініть `YOUR-LOGIN` на свій логін, а назву репозиторію — на вибрану на GitHub.
+Якщо `main` захищена, створіть гілку `git switch -c codex/postup-0.3.0` перед комітом, відправте її командою `git push -u origin codex/postup-0.3.0` й відкрийте Pull Request у `main`. Злийте після зеленого **Pilot checks**. Якщо Git Credential Manager відкриє браузер, підтвердьте вхід до GitHub. [Репозиторій](https://github.com/Guardianec/studentwatch) · [GitHub Actions](https://github.com/Guardianec/studentwatch/actions)
 
-   ```powershell
-   git branch -M main
-   git remote add origin https://github.com/YOUR-LOGIN/studentwatch.git
-   git remote -v
-   git push -u origin main
-   ```
-
-   Якщо Git Credential Manager відкриє браузер, підтвердьте вхід до GitHub у ньому.
-
-5. Оновіть сторінку репозиторію й перевірте гілку `main`, README та перший коміт. Коли завершите ручну перевірку інсталятора і захочете позначити версію, створіть і відправте тег.
-
-   ```powershell
-   git tag -a v0.1.0 -m "Поступ 0.1.0"
-   git push origin v0.1.0
-   ```
-
-   Для поширення інсталятора окремо створіть GitHub Release з цього тегу та додайте `Поступ_0.1.0_x64-setup.exe` із папки `bundle/nsis` як вкладення.
-
-[Офіційна інструкція GitHub](https://docs.github.com/en/migrations/importing-source-code/using-the-command-line-to-import-source-code/adding-locally-hosted-code-to-github)
+Після тестового онлайн-розгортання за потреби створіть тег `v0.3.0` і GitHub Release. Додайте зібраний із реальною HTTPS-адресою інсталятор як вкладення до Release. Перед оприлюдненням перевірте, кому має бути доступний інсталятор. [Керування GitHub Releases](https://docs.github.com/en/repositories/releasing-projects-on-github/managing-releases-in-a-repository)

@@ -6,9 +6,9 @@ export type Session = { user: User | null; csrf: string }
 export type MemberStatus = 'pending' | 'approved' | 'rejected' | 'removed'
 export type Group = { id: number; name: string; year: number; description: string; archived: boolean }
 export type GroupSummary = Group & { pending: number; approved: number }
-export type Member = { id: number; full_name: string; username: string; status: MemberStatus; requested_at: string }
+export type Member = { id: number; student_id: number; full_name: string; status: MemberStatus; requested_at: string }
 export type GroupDetail = Group & { invitation: { code: string; expires_at: string } | null; memberships: Member[] }
-export type Membership = { id: number; status: MemberStatus; group: Pick<Group, 'name' | 'year' | 'archived'> }
+export type Membership = { id: number; status: MemberStatus; group: Pick<Group, 'id' | 'name' | 'year' | 'archived'> }
 export type InvitePreview = { status: MemberStatus | null; group: Pick<Group, 'name' | 'year'> }
 type Method = 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE'
 
@@ -49,17 +49,18 @@ async function send<T>(path: string, method: Method, body?: object): Promise<T> 
     if (desktop) {
       reply = await invoke('api_request', { path, method, body, csrf: method === 'GET' ? undefined : csrf })
     } else {
+      const multipart = body instanceof FormData
       const response = await fetch(path, {
         method,
         credentials: 'same-origin',
         redirect: 'error',
         cache: 'no-store',
         headers: {
-          ...(body ? { 'Content-Type': 'application/json' } : {}),
+          ...(body && !multipart ? { 'Content-Type': 'application/json' } : {}),
           ...(method !== 'GET' ? { 'X-CSRFToken': csrf } : {}),
         },
-        body: body ? JSON.stringify(body) : undefined,
-        signal: AbortSignal.timeout(8000),
+        body: multipart ? body : body ? JSON.stringify(body) : undefined,
+        signal: AbortSignal.timeout(multipart ? 90_000 : 8000),
       })
       reply = { status: response.status, data: await response.json().catch(() => null) }
     }
@@ -69,7 +70,8 @@ async function send<T>(path: string, method: Method, body?: object): Promise<T> 
 
   const data = reply.data as { code?: string; message?: string; fields?: Record<string, string> } | null
   if (reply.status >= 200 && reply.status < 300 && data) return reply.data as T
-  if (reply.status >= 500 || (reply.status < 400 && !data)) throw networkFailure()
+  if ((reply.status >= 500 && !data?.message) || (reply.status < 400 && !data)) throw networkFailure()
+  if (reply.status === 413 && !data?.message) throw new ApiFailure('size', 'Файл перевищує дозволений розмір.')
   throw new ApiFailure(data?.code ?? 'request', data?.message ?? 'Запит не виконано. Спробуйте ще раз.', data?.fields)
 }
 
@@ -154,6 +156,41 @@ export async function signOut() {
 
 export function apiAddress() {
   return desktop ? invoke<string>('api_origin') : Promise.resolve(window.location.origin)
+}
+
+export async function downloadDocument(path: string, name: string) {
+  const caller = identity
+  let blob: Blob
+  try {
+    if (desktop) {
+      blob = new Blob([await invoke<ArrayBuffer>('api_download', { path })], { type: 'application/octet-stream' })
+    } else {
+      const response = await fetch(path, {
+        credentials: 'same-origin', redirect: 'error', cache: 'no-store', signal: AbortSignal.timeout(60_000),
+      })
+      if (response.status === 401) throw 'session'
+      if ([403, 404].includes(response.status)) throw 'missing'
+      if (!response.ok) throw 'network'
+      blob = new Blob([await response.blob()], { type: 'application/octet-stream' })
+    }
+  } catch (reason) {
+    if (reason === 'session' && caller === identity) {
+      identityChanged()
+      window.dispatchEvent(new Event('postup-session-expired'))
+      throw new ApiFailure('session', 'Сесія завершилася. Увійдіть знову.')
+    }
+    if (reason === 'missing') throw new ApiFailure('missing', 'Документ вилучено або доступу до нього немає.')
+    throw networkFailure(reason)
+  }
+  if (caller !== identity) return
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = name
+  document.body.append(link)
+  link.click()
+  link.remove()
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
 
 export function inviteLink(code: string) {

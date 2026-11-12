@@ -96,7 +96,7 @@ class AccountsTests(TestCase):
 
     def test_health_is_non_cors_and_read_only(self):
         response = self.client.get("/api/health/", headers={"Origin": "https://other.example"})
-        self.assertEqual(response.json(), {"service": "postup", "status": "ok", "version": "0.2.0"})
+        self.assertEqual(response.json(), {"service": "postup", "status": "ok", "version": "0.3.0"})
         self.assertEqual(response["Cache-Control"], "no-store")
         self.assertNotIn("Access-Control-Allow-Origin", response.headers)
         self.assertEqual(post(self.client, "/api/health/").status_code, 405)

@@ -53,7 +53,7 @@ class ApiHeaders:
                 return HttpResponse("Забагато спроб. Спробуйте пізніше.", status=429, headers={"Retry-After": str(wait)})
         response = self.get_response(request)
         if request.path.startswith("/api/"):
-            response["Cache-Control"] = "no-store"
+            response.setdefault("Cache-Control", "no-store")
         return response
 
 

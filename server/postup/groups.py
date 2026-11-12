@@ -11,7 +11,7 @@ from django.utils.crypto import salted_hmac
 from django.views.decorators.http import require_GET, require_http_methods, require_POST
 
 from .api import ApiError, endpoint, invalid, json_body, text_field, throttled
-from .models import Membership, StudyGroup, User
+from .models import AchievementEvent, Membership, StudyGroup, User
 
 INVITE_PATTERN = re.compile(r"[0-9a-f]{24}", re.ASCII)
 Status = Membership.Status
@@ -32,7 +32,7 @@ def group_data(group):
 
 def membership_data(item):
     return {"id": item.pk, "status": item.status, "requested_at": item.requested_at,
-            "full_name": item.student.full_name, "username": item.student.username}
+            "full_name": item.student.full_name, "student_id": item.student_id}
 
 
 def detail(group):
@@ -42,7 +42,8 @@ def detail(group):
         if digest(code) == group.invite_digest:
             invitation = {"code": code, "expires_at": group.invite_expires_at}
     return {**group_data(group), "invitation": invitation, "memberships": [
-        membership_data(item) for item in group.memberships.select_related("student").order_by("-requested_at", "id")
+        membership_data(item) for item in group.memberships.exclude(status=Status.REMOVED)
+        .select_related("student").order_by("-requested_at", "id")
     ]}
 
 
@@ -137,6 +138,12 @@ def membership(request, group_id, membership_id):
         item.status = transition
         item.decided_at = timezone.now()
         item.save(update_fields=["status", "decided_at"])
+        if transition == Status.REMOVED:
+            AchievementEvent.objects.bulk_create([
+                AchievementEvent(actor=request.user, achievement_id=record_id, action="access_revoked")
+                for record_id in item.achievement_shares.values_list("achievement_id", flat=True)
+            ])
+            item.achievement_shares.all().delete()
         return JsonResponse(detail(group))
 
 
@@ -178,5 +185,5 @@ def memberships(request):
     items = request.user.memberships.select_related("group").order_by("-requested_at", "id")
     return JsonResponse({"memberships": [{
         "id": item.pk, "status": item.status, "requested_at": item.requested_at,
-        "group": {"name": item.group.name, "year": item.group.year, "archived": item.group.archived},
+        "group": {"id": item.group_id, "name": item.group.name, "year": item.group.year, "archived": item.group.archived},
     } for item in items]})

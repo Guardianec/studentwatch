@@ -6,7 +6,7 @@ export function asFailure(reason: unknown) {
   return reason instanceof ApiFailure ? reason : new ApiFailure('request', 'Дію не виконано. Спробуйте ще раз.')
 }
 
-export function useResource<T>(path: string, visit = '') {
+export function useResource<T>(path: string, visit = '', privateView = false) {
   const [state, setState] = useState<{ data?: T; error?: ApiFailure; loading: boolean }>({ loading: true })
   const run = useRef<(afterPending?: boolean) => void>(() => {})
   const epoch = useRef(0)
@@ -35,7 +35,7 @@ export function useResource<T>(path: string, visit = '') {
           if (active && current === epoch.current) {
             const error = asFailure(reason)
             setState((previous) => ({
-              data: ['missing', 'forbidden', 'session'].includes(error.code) ? undefined : previous.data,
+              data: privateView || ['missing', 'forbidden', 'session'].includes(error.code) ? undefined : previous.data,
               error, loading: false,
             }))
           }
@@ -50,20 +50,46 @@ export function useResource<T>(path: string, visit = '') {
     }
     run.current = load
     load()
-    const timer = window.setInterval(() => { if (!failed && document.visibilityState === 'visible') load() }, 60_000)
+    const timer = window.setInterval(() => { if ((!failed || privateView) && document.visibilityState === 'visible') load() },
+      privateView ? 15_000 : 60_000)
     function onVisibility() { if (document.visibilityState === 'visible') load() }
     document.addEventListener('visibilitychange', onVisibility)
+    if (privateView) window.addEventListener('focus', onVisibility)
     return () => {
       active = false
       window.clearInterval(timer)
       document.removeEventListener('visibilitychange', onVisibility)
+      window.removeEventListener('focus', onVisibility)
     }
-  }, [path, visit])
+  }, [path, visit, privateView])
   const replace = useCallback((change: (previous?: T) => T) => {
     epoch.current += 1
     setState((previous) => ({ data: change(previous.data), loading: false }))
   }, [])
   return { ...state, refresh: () => run.current(), refreshAfterWrite: () => run.current(true), replace }
+}
+
+export function useUnsaved(dirty: boolean) {
+  useEffect(() => {
+    if (!dirty) return
+    function beforeUnload(event: BeforeUnloadEvent) {
+      event.preventDefault()
+      event.returnValue = ''
+    }
+    function beforeLeave(event: Event) {
+      if (!window.confirm('Є незбережені зміни. Вийти без збереження?')) event.preventDefault()
+    }
+    window.addEventListener('beforeunload', beforeUnload)
+    window.addEventListener('postup-before-leave', beforeLeave)
+    return () => {
+      window.removeEventListener('beforeunload', beforeUnload)
+      window.removeEventListener('postup-before-leave', beforeLeave)
+    }
+  }, [dirty])
+}
+
+export function canLeave() {
+  return window.dispatchEvent(new Event('postup-before-leave', { cancelable: true }))
 }
 
 export function useAction() {

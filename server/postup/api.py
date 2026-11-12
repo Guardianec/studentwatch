@@ -14,7 +14,7 @@ from django.views.decorators.http import require_GET, require_http_methods, requ
 from .middleware import limit
 from .models import ReleaseApproval, User
 
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 IDENTIFIER = re.compile(r"[a-z0-9._-]{3,40}", re.ASCII)
 
 
@@ -197,11 +197,3 @@ def sign_in(request):
 def sign_out(request):
     logout(request)
     return JsonResponse({"user": None})
-
-
-@require_POST
-@endpoint(User.Role.STUDENT)
-def profile(request):
-    request.user.full_name = text_field(json_body(request), "full_name", 1, 120)
-    request.user.save(update_fields=["full_name"])
-    return JsonResponse({"user": user_data(request.user)})

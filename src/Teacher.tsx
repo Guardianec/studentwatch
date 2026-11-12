@@ -1,12 +1,15 @@
 import { useEffect, useState, type FormEvent } from 'react'
-import { ChevronRight, ClipboardList, FolderOpen, House, Menu, Plus, RefreshCw, Settings, ThumbsUp, X } from 'lucide-react'
+import { Award, ChevronRight, ClipboardList, FolderOpen, House, Menu, Plus, RefreshCw, Settings, ThumbsUp, X } from 'lucide-react'
 import { version } from '../package.json'
 import { academicYear, api, apiAddress, inviteLink, type Group, type GroupDetail, type GroupSummary, type Member, type User } from './api'
 import { ErrorNotice, FieldError, MemberBadge, Modal, useAction, useResource } from './ui'
+import { TeacherProfile } from './Profile'
+import TeacherAchievements from './TeacherAchievements'
 
 const pages = {
   overview: { title: 'Огляд', icon: House },
   groups: { title: 'Групи', icon: FolderOpen },
+  achievements: { title: 'Досягнення', icon: Award },
   requests: { title: 'Заявки', icon: ClipboardList },
   settings: { title: 'Налаштування', icon: Settings },
 }
@@ -178,10 +181,8 @@ function GroupPanel({ id, page, changed }: {
         await update('', 'PATCH', input)
         setEditing(false)
       }} />}
-      {person && <Modal title="Профіль учасника" onClose={() => setPerson(undefined)}>
-        <h2>{person.full_name}</h2><p className="hint">Логін · {person.username}</p>
-        <dl className="facts"><div><dt>Група</dt><dd>{group.name}</dd></div>
-          <div><dt>Членство</dt><dd><MemberBadge status={person.status} /></dd></div></dl>
+      {person && <Modal title="Академічний профіль" onClose={() => setPerson(undefined)}>
+        <TeacherProfile key={person.student_id} id={person.student_id} />
       </Modal>}
       {confirmation && <Modal title={confirmation.label} onClose={() => setConfirmation(undefined)} busy={action.busy}>
         <p>{confirmation.text}</p>
@@ -304,7 +305,7 @@ export default function Teacher({ user, logout }: { user: User; logout: () => vo
           <button className="control" onClick={logout}>Вийти</button></div>
       </header>
       <main id="workspace" tabIndex={-1}>
-        {page === 'settings' ? <SettingsPage /> : <>
+        {page === 'settings' ? <SettingsPage /> : page === 'achievements' ? <TeacherAchievements /> : <>
           <header className="page-heading record-heading">
             <div><h1>{pages[page].title}</h1>
               <p>{summary.data ? 'Заявок, що очікують рішення: ' + pending : 'Ваші групи та заявки учнів.'}</p></div>

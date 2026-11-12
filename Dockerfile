@@ -16,4 +16,4 @@ COPY server/ ./server/
 COPY --from=frontend /app/dist ./dist
 RUN python server/manage.py collectstatic --noinput
 
-CMD ["sh", "-c", "python server/manage.py migrate --noinput && cd server && exec waitress-serve --listen=0.0.0.0:${PORT} --url-scheme=https --max-request-body-size=65536 postup.wsgi:application"]
+CMD ["sh", "-c", "python server/manage.py migrate --noinput && cd server && exec waitress-serve --listen=0.0.0.0:${PORT} --url-scheme=https --max-request-body-size=11534336 --inbuf-overflow=524288 postup.wsgi:application"]
