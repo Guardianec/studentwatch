@@ -3,27 +3,67 @@ import { RefreshCw } from 'lucide-react'
 import { academicYear, api, type InvitePreview, type Membership, type User } from './api'
 import { StudentProfile } from './Profile'
 import StudentAchievements from './StudentAchievements'
+import { apiQuery, eventDate, type Notification, type PageInfo } from './portfolio'
+import { eventLabels } from './ReviewDetails'
+import { PageButtons } from './PortfolioResults'
 import { canLeave, ErrorNotice, FieldError, MemberBadge, useAction, useResource } from './ui'
 
 export default function Student({ user, update, invite, setInvite }: {
   user: User; update: (user: User) => void; invite: string; setInvite: (code: string) => void
 }) {
-  const pages = { groups: 'Мої групи', profile: 'Мій профіль', achievements: 'Мої досягнення' }
+  const pages = { groups: 'Мої групи', profile: 'Мій профіль', achievements: 'Мої досягнення', notifications: 'Сповіщення' }
   const [page, setPage] = useState<keyof typeof pages>('groups')
+  const [record, setRecord] = useState<string>()
+  const [noticePage, setNoticePage] = useState(1)
+  const notices = useResource<{ unread: number; notifications: Notification[] } & PageInfo>(
+    apiQuery('/api/notifications/', { page: String(noticePage) }),
+  )
+  const noticeAction = useAction()
   function navigate(next: typeof page) {
     if (page !== next && canLeave()) {
       setPage(next)
+      setRecord(undefined)
+      if (next === 'notifications') notices.refresh()
       window.scrollTo(0, 0)
     }
+  }
+  function openRecord(id: string) {
+    setRecord(id)
+    setPage('achievements')
+    window.scrollTo(0, 0)
+  }
+  function markRead(item: Notification) {
+    void noticeAction.run(async () => {
+      await api('/api/notifications/' + item.id + '/read/', 'POST', {})
+      notices.refreshAfterWrite()
+    })
   }
   return <main className="standard-page student-page">
     <nav className="student-nav" aria-label="Кабінет учня">
       {(Object.keys(pages) as (keyof typeof pages)[]).map((id) => <button key={id}
-        aria-current={page === id ? 'page' : undefined} type="button" onClick={() => navigate(id)}>{pages[id]}</button>)}
+        aria-current={page === id ? 'page' : undefined} type="button" onClick={() => navigate(id)}>{pages[id]}
+        {id === 'notifications' && Boolean(notices.data?.unread) && ' · ' + notices.data?.unread}</button>)}
     </nav>
     {page === 'groups' && <StudentGroups invite={invite} setInvite={setInvite} />}
-    {page === 'profile' && <StudentProfile user={user} update={update} />}
-    {page === 'achievements' && <StudentAchievements openGroups={() => navigate('groups')} />}
+    {page === 'profile' && <StudentProfile user={user} update={update} openRecord={openRecord} />}
+    {page === 'achievements' && <StudentAchievements key={record ?? 'list'} initialId={record} openGroups={() => navigate('groups')} />}
+    {page === 'notifications' && <>
+      <header className="page-heading"><h1>Сповіщення</h1></header>
+      <ErrorNotice error={notices.error} retry={notices.refresh} />
+      <ErrorNotice error={noticeAction.error} />
+      {notices.loading && !notices.data && <p role="status">Завантажуємо сповіщення…</p>}
+      {notices.data?.notifications.length === 0 && <p>Повідомлень поки немає.</p>}
+      <ul className="record-list history-list">{notices.data?.notifications.map((item) => <li key={item.id}>
+        <strong>{item.competition} · {eventLabels[item.action]}</strong>
+        <p className="hint">{[item.group, eventDate(item.at), item.read ? 'Прочитане' : 'Нове'].filter(Boolean).join(' · ')}</p>
+        {item.details.comment && <p className="preserve-lines">{item.details.comment}</p>}
+        <div className="actions">
+          <button className="control" onClick={() => openRecord(item.record_id)}>Відкрити запис</button>
+          {!item.read && <button className="control" disabled={noticeAction.busy} onClick={() => markRead(item)}>Позначити прочитаним</button>}
+        </div>
+      </li>)}</ul>
+      {notices.data && <PageButtons data={notices.data} move={setNoticePage} />}
+    </>}
   </main>
 }
 

@@ -11,7 +11,7 @@ from django.utils.crypto import salted_hmac
 from django.views.decorators.http import require_GET, require_http_methods, require_POST
 
 from .api import ApiError, endpoint, invalid, json_body, text_field, throttled
-from .models import AchievementEvent, Membership, StudyGroup, User
+from .models import AchievementEvent, AchievementShare, Membership, StudyGroup, User
 
 INVITE_PATTERN = re.compile(r"[0-9a-f]{24}", re.ASCII)
 Status = Membership.Status
@@ -93,6 +93,14 @@ def group_detail(request, group_id):
     with transaction.atomic():
         group = owned(request, group_id, lock=True)
         if data.get("archive") is True:
+            if not group.archived:
+                AchievementEvent.objects.bulk_create([
+                    AchievementEvent(actor=request.user, achievement_id=record_id, action="access_revoked",
+                                     group=group, version=version)
+                    for record_id, version in AchievementShare.objects.filter(
+                        membership__group=group, membership__status=Status.APPROVED, submitted_at__isnull=False,
+                    ).values_list("achievement_id", "achievement__version")
+                ])
             group.archived = True
             clear_invite(group)
         else:
@@ -140,8 +148,10 @@ def membership(request, group_id, membership_id):
         item.save(update_fields=["status", "decided_at"])
         if transition == Status.REMOVED:
             AchievementEvent.objects.bulk_create([
-                AchievementEvent(actor=request.user, achievement_id=record_id, action="access_revoked")
-                for record_id in item.achievement_shares.values_list("achievement_id", flat=True)
+                AchievementEvent(actor=request.user, achievement_id=record_id, action="access_revoked",
+                                 group=group, version=version)
+                for record_id, version in item.achievement_shares.filter(submitted_at__isnull=False)
+                .values_list("achievement_id", "achievement__version")
             ])
             item.achievement_shares.all().delete()
         return JsonResponse(detail(group))

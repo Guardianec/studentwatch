@@ -7,13 +7,14 @@ from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.validators import DecimalValidator, URLValidator
 from django.db import IntegrityError, transaction
-from django.db.models import Exists, OuterRef, Prefetch
+from django.db.models import Exists, Max, OuterRef, Prefetch
 from django.http import JsonResponse
+from django.utils import timezone
 from django.views.decorators.http import require_GET, require_http_methods, require_POST
 
 from .api import ApiError, endpoint, invalid, json_body, text_field, user_data, user_role
 from .models import (
-    AcademicProfile, Achievement, AchievementEvent, AchievementShare, Attachment,
+    AcademicProfile, Achievement, AchievementEvent, AchievementShare,
     Competition, CompetitionCategory, CompetitionCycle, CompetitionStage, Membership, StudyGroup, User,
 )
 
@@ -23,6 +24,8 @@ RESULT_TEXT = {
     "section": 120, "topic": 200, "school": 160, "grade": 40, "declared_team": 120,
     "declared_members": 500, "award": 120, "placement": 80, "description": 1200,
 }
+RESULT_FIELDS = (*RESULT_TEXT, "competition_id", "cycle_id", "stage_id", "starts_on", "ends_on",
+                 "academic_year", "participation", "result_kind", "score")
 SAFE_URL = URLValidator(schemes=["https", "http"])
 REVISION_MESSAGE = "Запис уже змінено. Відкрийте актуальну версію, перш ніж зберігати."
 Status = Achievement.Status
@@ -142,7 +145,7 @@ def catalogue(request):
 def visible_achievements(user):
     if portfolio_user(user) == User.Role.STUDENT:
         return Achievement.objects.filter(owner=user)
-    return Achievement.objects.exclude(status=Status.DRAFT).filter(
+    return Achievement.objects.filter(status=Status.SUBMITTED).filter(
         owner__role=User.Role.STUDENT,
     ).filter(Exists(AchievementShare.objects.filter(
         achievement_id=OuterRef("pk"), membership__student_id=OuterRef("owner_id"),
@@ -159,45 +162,131 @@ def get_record(user, record_id, *, lock=False):
 
 
 def attachment_data(item):
-    return {"id": item.pk, "filename": item.filename, "content_type": item.content_type, "size": item.size}
+    return {"id": item.pk, "filename": item.filename, "content_type": item.content_type, "size": item.size,
+            "added_revision": item.added_revision}
+
+
+def active_shares(record):
+    return record.shares.filter(membership__student_id=record.owner_id, membership__status=Membership.Status.APPROVED,
+                                membership__group__archived=False)
+
+
+def shares_for(record, viewer):
+    shares = active_shares(record)
+    if viewer.pk != record.owner_id:
+        shares = shares.filter(membership__group__owner=viewer)
+    return shares.select_related("membership__group", "decision__actor").order_by("membership__group_id")
+
+
+def share_data(share, *, detail=False, viewer=None):
+    record = share.achievement
+    latest = getattr(record, "latest_attachment", None)
+    if not hasattr(record, "latest_attachment"):
+        latest = record.attachments.aggregate(latest=Max("added_revision"))["latest"]
+    value = {"group_id": share.membership.group_id, "group": share.membership.group.name, "status": share.status,
+             "revision": share.revision, "submitted_at": share.submitted_at, "seen_materials": share.seen_materials,
+             "new_materials": max(latest or 0, record.link_revision) > share.seen_materials}
+    if detail:
+        value["decision"] = event_data(share.decision) if share.decision else None
+        value["can_revoke"] = share.status == Status.VERIFIED and share.decision_id is not None and share.decision.actor_id == viewer.pk
+    return value
 
 
 def summary(record):
+    contest = record.shared_result()
     return {
         "id": record.pk, "student": {"id": record.owner_id, "full_name": record.owner.full_name},
-        "competition_name": str(record.competition) if record.competition_id else record.competition_proposal,
-        "competition_id": record.competition_id, "season": record.cycle.season if record.cycle_id else record.season_proposal,
-        "stage_name": record.stage.name if record.stage_id else record.stage_proposal,
+        "competition_name": contest["competition"], "competition_id": record.competition_id, "season": contest["season"],
+        "stage_name": contest["stage"], "category_id": record.competition.category_id if record.competition_id else None,
         "academic_year": record.academic_year, "status": record.status, "evidence": record.evidence,
         "has_document": record.has_document if hasattr(record, "has_document") else record.attachments.exists(),
         "has_link": bool(record.results_url),
         "result_kind": record.result_kind, "participation": record.participation,
-        "updated_at": record.updated_at,
+        "updated_at": record.updated_at, "version": record.version,
+        "resubmitted": record.submission_count > 1,
+        "result_label": record.award or record.placement or record.get_result_kind_display(),
+    }
+
+
+def result_values(record):
+    return {field: getattr(record, field) for field in RESULT_FIELDS} | {
+        "starts_on": record.starts_on.isoformat() if record.starts_on else None,
+        "ends_on": record.ends_on.isoformat() if record.ends_on else None,
+        "score": str(record.score) if record.score is not None else None,
     }
 
 
 def record_data(record, viewer):
-    value = {**summary(record), **{field: getattr(record, field) for field in RESULT_TEXT},
-             "cycle_id": record.cycle_id, "stage_id": record.stage_id, "revision": record.revision,
-             "starts_on": record.starts_on, "ends_on": record.ends_on,
-             "score": str(record.score) if record.score is not None else None, "results_url": record.results_url,
+    shares = list(shares_for(record, viewer))
+    attachments = list(record.attachments.order_by("created_at", "id"))
+    record.latest_attachment = max((item.added_revision for item in attachments), default=0)
+    value = {**summary(record), **result_values(record),
+             "results_url": record.results_url, "materials_revision": record.materials_revision,
+             "reviews": [share_data(item, detail=True, viewer=viewer) for item in shares if item.submitted_at],
              "team": {"id": record.team_id, "name": record.team.name, "result": record.team.result} if record.team_id else None,
-             "attachments": [attachment_data(item) for item in record.attachments.order_by("created_at", "id")]}
+             "attachments": [attachment_data(item) for item in attachments]}
     if viewer.pk == record.owner_id:
-        value["group_ids"] = list(record.shares.filter(
-            membership__status=Membership.Status.APPROVED, membership__group__archived=False,
-        ).order_by("membership__group_id").values_list("membership__group_id", flat=True))
+        value["revision"] = record.revision
+        value["group_ids"] = [item.membership.group_id for item in shares]
+        value["changes_draft"] = record.changes_draft
+        value["can_withdraw"] = record.status == Status.SUBMITTED and not any(
+            item.status != Status.SUBMITTED or item.decision_id for item in shares
+        )
         value["duplicate"] = possible_duplicate(record)
     return value
 
 
-def event(user, record, action, attachment_id=None):
-    AchievementEvent.objects.create(actor=user, achievement_id=record.pk, action=action, attachment_id=attachment_id)
+def event(user, record, action, attachment_id=None, *, group_id=None, details=None, request_id=None):
+    return AchievementEvent.objects.create(actor=user, achievement_id=record.pk, action=action, attachment_id=attachment_id,
+                                           version=record.version, group_id=group_id, details=details or {}, request_id=request_id)
 
 
-def update_record(record, fields=None):
+def event_data(item):
+    details = {key: value for key, value in item.details.items() if key != "input_revision"}
+    return {"id": item.pk, "actor": item.actor.full_name if item.actor else "", "version": item.version,
+            "action": item.action, "group_id": item.group_id, "at": item.created_at, "details": details}
+
+
+def history_values(record):
+    # Use labels for catalogue references so history survives catalogue renames.
+    labels = {"competition_name": "competition", "season": "season", "stage_name": "stage"}
+    result = result_values(record)
+    for field in ("competition_id", "cycle_id", "stage_id", "competition_proposal", "season_proposal", "stage_proposal"):
+        result.pop(field)
+    shared = record.shared_result()
+    return result | {field: shared[key] for field, key in labels.items()}
+
+
+def differences(before, after):
+    old, new = history_values(before), history_values(after)
+    return {key: [old[key], value] for key, value in new.items() if old[key] != value}
+
+
+def reset_reviews(record, actor, *, attachment_id=None, previous_url=None, all_groups=False):
+    decisions = record.shares.filter(submitted_at__isnull=False).select_related("decision", "membership")
+    for share in decisions:
+        basis = share.decision.details if share.decision else {}
+        invalidated = (attachment_id is not None and str(attachment_id) in basis.get("attachments", [])) or (
+            previous_url is not None and basis.get("url") == previous_url
+        )
+        if all_groups or (share.status == Status.VERIFIED and invalidated):
+            needs_notice = all_groups and share.status == Status.VERIFIED
+            share.status = Status.SUBMITTED
+            share.revision += 1
+            share.decision = None
+            share.save(update_fields=["status", "revision", "decision"])
+            if needs_notice:
+                event(actor, record, "team_review_reset", group_id=share.membership.group_id)
+            elif not all_groups:
+                event(actor, record, "basis_removed", group_id=share.membership.group_id)
+
+
+def update_record(record, fields=None, *, private=False):
     record.revision += 1
-    record.save(update_fields=[*fields, "revision", "updated_at"] if fields is not None else None)
+    if private:
+        record.save(update_fields=[*fields, "revision"])
+    else:
+        record.save(update_fields=[*fields, "revision", "updated_at"] if fields is not None else None)
 
 
 def uuid_field(data, field, *, optional=False):
@@ -276,7 +365,6 @@ def result_fields(record, data):
         record.declared_team = record.declared_members = ""
     record.result_kind = pick(data, "result_kind", Achievement.Result.values)
     record.score = result_score(data)
-    evidence_fields(record, data)
 
 
 def evidence_fields(record, data):
@@ -306,10 +394,8 @@ def possible_duplicate(record):
 @endpoint()
 def achievements(request):
     if request.method == "GET":
-        records = visible_achievements(request.user).select_related("owner", "competition", "cycle", "stage").annotate(
-            has_document=Exists(Attachment.objects.filter(achievement_id=OuterRef("pk"))),
-        ).order_by("-updated_at", "id")
-        return JsonResponse({"records": [summary(item) for item in records]})
+        from .review import portfolio_list
+        return portfolio_list(request)
     if portfolio_user(request.user) != User.Role.STUDENT:
         raise ApiError("forbidden", "Створювати досягнення може учень.", 403)
     data = json_body(request)
@@ -326,6 +412,7 @@ def achievements(request):
         profile = AcademicProfile.objects.filter(student=request.user).first() or AcademicProfile()
         record = Achievement(id=record_id, owner=request.user)
         result_fields(record, {"school": profile.school, "grade": profile.grade, **data})
+        evidence_fields(record, data)
         try:
             with transaction.atomic():
                 record.save(force_insert=True)
@@ -350,17 +437,40 @@ def achievement(request, record_id):
         lock_student(request.user)
         record = get_record(request.user, record_id, lock=True)
         check_revision(data.get("revision"), record.revision)
-        if record.status != Status.DRAFT:
-            raise ApiError("conflict", "Відкличте неперевірений запис, щоб змінити результат.", 409)
         if request.method == "DELETE":
-            for attachment_id in record.attachments.values_list("id", flat=True):
-                event(request.user, record, "attachment_removed", attachment_id)
+            if record.status != Status.DRAFT:
+                raise ApiError("conflict", "Видалити можна лише чернетку.", 409)
+            for item in record.attachments.all():
+                event(request.user, record, "attachment_removed", item.pk, details={"filename": item.filename})
             event(request.user, record, "deleted")
             record.delete()
             return JsonResponse({"deleted": True})
-        result_fields(record, data)
-        save_draft_groups(request.user, record, data)
-        update_record(record)
+        if record.status == Status.DRAFT:
+            before = history_values(record)
+            result_fields(record, data)
+            evidence_fields(record, data)
+            save_draft_groups(request.user, record, data)
+            update_record(record)
+            diff = {key: [before[key], value] for key, value in history_values(record).items() if before[key] != value}
+            if diff:
+                event(request.user, record, "draft_edited", details={"changes": diff})
+        else:
+            draft = Achievement()
+            result_fields(draft, data)
+            record.changes_draft = result_values(draft) | {"reply": text_field(data, "reply", 0, 600)}
+            update_record(record, ["changes_draft"], private=True)
+        return JsonResponse(record_data(record, request.user))
+
+
+@require_http_methods(["DELETE"])
+@endpoint(User.Role.STUDENT)
+def discard_changes(request, record_id):
+    with transaction.atomic():
+        record = get_record(request.user, record_id, lock=True)
+        check_revision(json_body(request).get("revision"), record.revision)
+        if record.changes_draft is not None:
+            record.changes_draft = None
+            update_record(record, ["changes_draft"], private=True)
         return JsonResponse(record_data(record, request.user))
 
 
@@ -386,33 +496,77 @@ def save_draft_groups(user, record, data):
 @endpoint(User.Role.STUDENT)
 def submit(request, record_id):
     data = json_body(request)
+    request_id = uuid_field(data, "request_id", optional=True)
     with transaction.atomic():
         record = get_record(request.user, record_id, lock=True)
-        if (record.status == Status.SUBMITTED and data.get("revision") == record.revision - 1
-                and data.get("group_ids") == list(record.shares.order_by("membership__group_id").values_list("membership__group_id", flat=True))):
+        if request_id:
+            previous = AchievementEvent.objects.filter(request_id=request_id).first()
+            if previous:
+                if previous.achievement_id == record.pk and previous.actor_id == request.user.pk and previous.action in ("submitted", "resubmitted"):
+                    return JsonResponse(record_data(record, request.user))
+                raise ApiError("conflict", REVISION_MESSAGE, 409)
+        elif (record.status == Status.SUBMITTED and not record.changes_draft and data.get("revision") == record.revision - 1
+              and data.get("group_ids") == list(active_shares(record).order_by("membership__group_id").values_list("membership__group_id", flat=True))
+              and AchievementEvent.objects.filter(achievement_id=record.pk, version=record.version,
+                action__in=("submitted", "resubmitted"), details__input_revision=data.get("revision")).exists()):
             return JsonResponse(record_data(record, request.user))
         check_revision(data.get("revision"), record.revision)
-        if record.status != Status.DRAFT:
-            raise ApiError("conflict", "Подати можна лише чернетку.", 409)
+        resubmitting = record.status != Status.DRAFT
+        if resubmitting and record.changes_draft is None:
+            raise ApiError("conflict", "Збережіть чернетку змін перед повторним поданням.", 409)
+        candidate = Achievement(id=record.pk, owner_id=record.owner_id) if resubmitting else record
+        if resubmitting:
+            result_fields(candidate, record.changes_draft)
         fields = {}
-        if not record.competition_id and not record.competition_proposal:
+        if not candidate.competition_id and not candidate.competition_proposal:
             fields["competition_id"] = "Виберіть конкурс або введіть запропоновану назву."
-        if not record.cycle_id and not record.season_proposal:
+        if not candidate.cycle_id and not candidate.season_proposal:
             fields["cycle_id"] = "Виберіть цикл або зазначте сезон."
-        if record.participation == Achievement.Participation.TEAM and not record.declared_team:
+        if candidate.participation == Achievement.Participation.TEAM and not candidate.declared_team:
             fields["declared_team"] = "Введіть назву команди."
         if record.evidence == Achievement.Evidence.LINK and not record.results_url:
             fields["results_url"] = "Додайте посилання на результати або змініть стан матеріалів."
         if fields:
             invalid(fields)
-        if possible_duplicate(record) and data.get("allow_duplicate") is not True:
+        if possible_duplicate(candidate) and data.get("allow_duplicate") is not True:
             raise ApiError("duplicate", "У вас уже є схожий запис. Підтвердьте, якщо це окремий результат.", 409)
         members = recipients(request.user, data)
-        record.shares.all().delete()
-        AchievementShare.objects.bulk_create([AchievementShare(achievement=record, membership=item) for item in members])
+        current = {share.membership_id: share for share in record.shares.select_related("membership").order_by("pk")}
+        selected = {member.pk: member for member in members}
+        diff = differences(record, candidate) if resubmitting else {}
+        reply = record.changes_draft.get("reply", "") if resubmitting else ""
+        if resubmitting:
+            if record.team_id and (record.team_context() != candidate.team_context() or candidate.participation != record.participation):
+                record.team = None
+            result_fields(record, record.changes_draft)
+        record.changes_draft = None
+        record.version += 1
+        record.submission_count += 1
         record.status = Status.SUBMITTED
-        update_record(record, ["status"])
-        event(request.user, record, "submitted")
+        update_record(record)
+        now = timezone.now()
+        for member_id, share in current.items():
+            if member_id not in selected:
+                if share.submitted_at:
+                    event(request.user, record, "access_revoked", group_id=share.membership.group_id)
+                share.delete()
+        for member_id, member in selected.items():
+            share = current.get(member_id)
+            if share and share.submitted_at:
+                share.status, share.decision, share.submitted_at = Status.SUBMITTED, None, now
+                share.revision += 1
+                share.save(update_fields=["status", "decision", "submitted_at", "revision"])
+            else:
+                if share:
+                    share.delete()
+                AchievementShare.objects.create(achievement=record, membership=member, first_version=record.version, submitted_at=now)
+                event(request.user, record, "access_granted", group_id=member.group_id)
+        try:
+            with transaction.atomic():
+                event(request.user, record, "resubmitted" if record.submission_count > 1 else "submitted", request_id=request_id,
+                      details={"changes": diff, "reply": reply, "input_revision": data.get("revision")})
+        except IntegrityError:
+            raise ApiError("conflict", REVISION_MESSAGE, 409) from None
         return JsonResponse(record_data(record, request.user))
 
 
@@ -423,12 +577,15 @@ def withdraw(request, record_id):
     with transaction.atomic():
         record = get_record(request.user, record_id, lock=True)
         check_revision(data.get("revision"), record.revision)
-        if record.status != Status.SUBMITTED:
+        if record.status != Status.SUBMITTED or active_shares(record).exclude(status=Status.SUBMITTED, decision__isnull=True).exists():
             raise ApiError("conflict", "Відкликати можна лише неперевірений запис.", 409)
+        for share in record.shares.filter(submitted_at__isnull=False).select_related("membership"):
+            event(request.user, record, "access_revoked", group_id=share.membership.group_id)
         record.shares.all().delete()
         record.team = None
+        record.changes_draft = None
         record.status = Status.DRAFT
-        update_record(record, ["status", "team"])
+        update_record(record, ["status", "team", "changes_draft"])
         event(request.user, record, "withdrawn")
         return JsonResponse(record_data(record, request.user))
 
@@ -446,9 +603,20 @@ def evidence(request, record_id):
         record = get_record(request.user, record_id, lock=True)
         check_revision(data.get("revision"), record.revision)
         require_editable_evidence(record)
+        before = record.results_url
+        previous_evidence = record.evidence
         evidence_fields(record, data)
         if record.evidence == Achievement.Evidence.LINK and not record.results_url:
             invalid({"results_url": "Додайте посилання на результати або змініть стан матеріалів."})
-        update_record(record, ["evidence", "results_url"])
-        event(request.user, record, "evidence_changed")
+        if before != record.results_url:
+            record.materials_revision += 1
+            record.link_revision = record.materials_revision if record.results_url else 0
+            if before:
+                reset_reviews(record, request.user, previous_url=before)
+        update_record(record, ["evidence", "results_url", "materials_revision", "link_revision"])
+        if previous_evidence != record.evidence or before != record.results_url:
+            details = {"link_changed": before != record.results_url}
+            if previous_evidence != record.evidence:
+                details["changes"] = {"evidence": [previous_evidence, record.evidence]}
+            event(request.user, record, "evidence_changed", details=details)
         return JsonResponse(record_data(record, request.user))

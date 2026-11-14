@@ -112,6 +112,9 @@ async fn send(
     body: Option<Value>,
     csrf: Option<String>,
 ) -> Result<reqwest::Response, &'static str> {
+    let (path, query) = path
+        .split_once('?')
+        .map_or((path, None), |(path, query)| (path, Some(query)));
     if !path.starts_with("/api/")
         || !path.ends_with('/')
         || !path
@@ -130,6 +133,12 @@ async fn send(
     };
     let mut url = transport.origin.clone();
     url.set_path(path);
+    if let Some(query) = query {
+        if method != Method::GET || query.len() > 4096 {
+            return Err("request");
+        }
+        url.set_query(Some(query));
+    }
     let mut request = transport
         .http
         .request(method, url)

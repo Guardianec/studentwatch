@@ -2,14 +2,14 @@ import { useEffect, useState, type FormEvent } from 'react'
 import { Award, ChevronRight, ClipboardList, FolderOpen, House, Menu, Plus, RefreshCw, Settings, ThumbsUp, X } from 'lucide-react'
 import { version } from '../package.json'
 import { academicYear, api, apiAddress, inviteLink, type Group, type GroupDetail, type GroupSummary, type Member, type User } from './api'
-import { ErrorNotice, FieldError, MemberBadge, Modal, useAction, useResource } from './ui'
+import { canLeave, ErrorNotice, FieldError, MemberBadge, Modal, useAction, useResource } from './ui'
 import { TeacherProfile } from './Profile'
-import TeacherAchievements from './TeacherAchievements'
+import TeacherAchievements, { TeacherRecord } from './TeacherAchievements'
 
 const pages = {
   overview: { title: 'Огляд', icon: House },
   groups: { title: 'Групи', icon: FolderOpen },
-  achievements: { title: 'Досягнення', icon: Award },
+  achievements: { title: 'На перевірці', icon: Award },
   requests: { title: 'Заявки', icon: ClipboardList },
   settings: { title: 'Налаштування', icon: Settings },
 }
@@ -68,6 +68,7 @@ function GroupPanel({ id, page, changed }: {
   const action = useAction()
   const [editing, setEditing] = useState(false)
   const [person, setPerson] = useState<Member>()
+  const [portfolioRecord, setPortfolioRecord] = useState<string>()
   const [notice, setNotice] = useState('')
   const [confirmation, setConfirmation] = useState<{ text: string; label: string; run: () => Promise<void> }>()
   const group = resource.data
@@ -182,7 +183,12 @@ function GroupPanel({ id, page, changed }: {
         setEditing(false)
       }} />}
       {person && <Modal title="Академічний профіль" onClose={() => setPerson(undefined)}>
-        <TeacherProfile key={person.student_id} id={person.student_id} />
+        <TeacherProfile key={person.student_id} id={person.student_id} groupId={group.id} openRecord={(record) => {
+          setPerson(undefined); setPortfolioRecord(record)
+        }} />
+      </Modal>}
+      {portfolioRecord && <Modal title="Досягнення з портфоліо" onClose={() => setPortfolioRecord(undefined)} beforeClose={canLeave}>
+        <TeacherRecord id={portfolioRecord} groupId={group.id} />
       </Modal>}
       {confirmation && <Modal title={confirmation.label} onClose={() => setConfirmation(undefined)} busy={action.busy}>
         <p>{confirmation.text}</p>
@@ -291,7 +297,10 @@ export default function Teacher({ user, logout }: { user: User; logout: () => vo
           <span className="nav-label">Кабінет учителя</span>
           {(Object.keys(pages) as Page[]).map((id) => {
             const { title, icon: Icon } = pages[id]
-            return <a key={id} href={'#' + id} aria-current={page === id ? 'page' : undefined} onClick={() => setMenu(false)}>
+            return <a key={id} href={'#' + id} aria-current={page === id ? 'page' : undefined} onClick={(event) => {
+              if (id !== page && !canLeave()) event.preventDefault()
+              else setMenu(false)
+            }}>
               <Icon size={17} aria-hidden="true" />{title}{id === 'requests' && pending > 0 && <span className="nav-count">{pending}</span>}
             </a>
           })}
@@ -305,7 +314,7 @@ export default function Teacher({ user, logout }: { user: User; logout: () => vo
           <button className="control" onClick={logout}>Вийти</button></div>
       </header>
       <main id="workspace" tabIndex={-1}>
-        {page === 'settings' ? <SettingsPage /> : page === 'achievements' ? <TeacherAchievements /> : <>
+        {page === 'settings' ? <SettingsPage /> : page === 'achievements' ? <TeacherAchievements groups={groups} /> : <>
           <header className="page-heading record-heading">
             <div><h1>{pages[page].title}</h1>
               <p>{summary.data ? 'Заявок, що очікують рішення: ' + pending : 'Ваші групи та заявки учнів.'}</p></div>

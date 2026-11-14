@@ -14,7 +14,7 @@ from django.views.decorators.http import require_GET, require_http_methods, requ
 from .middleware import limit
 from .models import ReleaseApproval, User
 
-VERSION = "0.3.0"
+VERSION = "0.4.0"
 IDENTIFIER = re.compile(r"[a-z0-9._-]{3,40}", re.ASCII)
 
 

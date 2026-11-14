@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
-import { ArrowLeft, ChevronRight, Plus } from 'lucide-react'
+import { ArrowLeft, Plus, RefreshCw } from 'lucide-react'
 import { academicYear, api, ApiFailure, type Group, type Membership } from './api'
 import { DocumentList, RecordBadges, ResultDetails } from './AchievementDetails'
+import { GroupReviews, History } from './ReviewDetails'
+import { PortfolioResults } from './PortfolioResults'
 import {
-  evidenceKinds, recordPath, recordTitle, resultKinds, waitingForDocument,
-  type Achievement, type Attachment, type Catalogue, type Profile, type RecordInput, type RecordSummary, type UploadLimits,
+  evidenceKinds, recordPath, recordTitle, resultKinds,
+  type Achievement, type Attachment, type Catalogue, type Profile, type RecordInput, type UploadLimits,
 } from './portfolio'
 import { canLeave, ErrorNotice, useAction, useResource, useUnsaved } from './ui'
 
@@ -156,15 +158,21 @@ function Editor({ initial, catalogue, profile, groups, close, changed, openGroup
 }) {
   const [id] = useState(() => initial?.id ?? crypto.randomUUID())
   const [record, setRecord] = useState(initial)
-  const [form, setForm] = useState<RecordInput>(() => {
+  function startingForm(current?: Achievement): RecordInput {
     const empty = newInput(profile, groups)
-    if (!initial) return empty
+    if (!current) return empty
+    const values = { ...current, ...current.changes_draft }
     return {
-      ...Object.fromEntries(Object.keys(empty).map((key) => [key, initial[key as keyof RecordInput]])),
-      group_ids: initial.group_ids?.length ? initial.group_ids : empty.group_ids,
+      ...Object.fromEntries(Object.keys(empty).map((key) => [key, values[key as keyof RecordInput]])),
+      group_ids: current.group_ids?.length ? current.group_ids : empty.group_ids,
     } as RecordInput
-  })
+  }
+  const [form, setForm] = useState<RecordInput>(() => startingForm(initial))
   const [baseline, setBaseline] = useState(JSON.stringify(form))
+  const [revisionEditing, setRevisionEditing] = useState(false)
+  const [reply, setReply] = useState(initial?.changes_draft?.reply ?? '')
+  const [savedReply, setSavedReply] = useState(reply)
+  const submitId = useRef(crypto.randomUUID())
   const [step, setStep] = useState(0)
   const [files, setFiles] = useState<PendingFile[]>([])
   const [showMaterials, setShowMaterials] = useState(false)
@@ -172,10 +180,15 @@ function Editor({ initial, catalogue, profile, groups, close, changed, openGroup
   const [allowDuplicate, setAllowDuplicate] = useState(false)
   const heading = useRef<HTMLHeadingElement>(null)
   const action = useAction()
-  const editable = !record || record.status === 'draft'
-  const dirty = JSON.stringify(form) !== baseline
+  const editable = !record || record.status === 'draft' || revisionEditing
+  const dirty = JSON.stringify(form) !== baseline || reply !== savedReply
   useUnsaved(editable && (dirty || files.length > 0))
   useEffect(() => { heading.current?.focus({ preventScroll: true }) }, [step])
+  useEffect(() => {
+    if (initial?.status === 'submitted' && !revisionEditing && !showMaterials) {
+      setRecord((current) => current && initial.revision >= current.revision ? initial : current)
+    }
+  }, [initial, revisionEditing, showMaterials])
 
   const competition = catalogue.categories.flatMap((category) => category.competitions).find((item) => item.id === form.competition_id)
   const cycle = competition?.cycles.find((item) => item.id === form.cycle_id)
@@ -193,21 +206,24 @@ function Editor({ initial, catalogue, profile, groups, close, changed, openGroup
 
   async function persist(submitting: boolean) {
     let current = record
-    if (!current || dirty) {
-      const body = { ...form, group_ids: selectedGroups.map(({ id }) => id) }
+    if (!current || dirty || (revisionEditing && !current.changes_draft)) {
+      const body = { ...form, reply, group_ids: selectedGroups.map(({ id }) => id) }
       current = current
         ? await api<Achievement>(recordPath(id), 'PATCH', { ...body, revision: current.revision })
         : await api<Achievement>('/api/achievements/', 'POST', { ...body, id })
       stored(current)
       setBaseline(JSON.stringify(form))
+      setSavedReply(reply)
       setSaved('Чернетку збережено.')
     }
     current = await saveDocuments(current, files, stored, finishedFile)
     if (submitting) {
       stored(await api<Achievement>(recordPath(id) + 'submit/', 'POST', {
         revision: current.revision, group_ids: selectedGroups.map(({ id }) => id).sort((a, b) => a - b),
-        allow_duplicate: allowDuplicate,
+        allow_duplicate: allowDuplicate, request_id: submitId.current,
       }))
+      submitId.current = crypto.randomUUID()
+      setRevisionEditing(false)
       setSaved('Результат подано вибраним групам.')
     } else setSaved('Чернетку збережено.')
   }
@@ -228,7 +244,7 @@ function Editor({ initial, catalogue, profile, groups, close, changed, openGroup
     </button>
     <header className="page-heading record-heading">
       <div><h1>{editable ? (record ? 'Редагування чернетки' : 'Нове досягнення') : recordTitle(record)}</h1>
-        {record && <RecordBadges record={record} />}</div>
+        {record && <RecordBadges record={{ ...record, has_changes_draft: Boolean(record.changes_draft) }} />}</div>
     </header>
     {saved && !editable && <p className="invite-preview" role="status">{saved}</p>}
     {editable ? <>
@@ -313,11 +329,16 @@ function Editor({ initial, catalogue, profile, groups, close, changed, openGroup
         {step === 2 && <>
           <fieldset disabled={action.busy}><legend>Матеріали й одержувачі</legend>
             <p className="hint">Диплом можна додати після подання. Учителі вибраних груп побачать результат і прикріплені матеріали.</p>
-            <MaterialsFields evidence={form.evidence} url={form.results_url} change={patch} />
+            {revisionEditing ? <>
+              <p className="hint">Після подання нова версія замінить поточну в усіх вибраних групах. Цим групам потрібно перевірити результат знову. Групи, які ви знімете з вибору, втратять доступ.</p>
+              <label>Що виправлено <span className="hint">Необов’язково</span>
+                <textarea value={reply} maxLength={600} rows={3} onChange={(event) => setReply(event.target.value)} />
+              </label>
+            </> : <><MaterialsFields evidence={form.evidence} url={form.results_url} change={patch} />
             <DocumentsEditor record={record} files={files} onFiles={setFiles} limits={catalogue.upload_limits} busy={action.busy} remove={(item) =>
               record && void action.run(async () => stored(await api<Achievement>(
                 recordPath(id) + 'attachments/' + item.id + '/', 'DELETE', { revision: record.revision },
-              )))} />
+              )))} /></>}
             <h3>Кому показати результат</h3>
             {groups.length ? <div className="choice-list" role="group" aria-label="Одержувачі">
               {groups.map((group) => <label key={group.id}><input type="checkbox" checked={selectedGroups.includes(group)} onChange={(event) =>
@@ -347,7 +368,7 @@ function Editor({ initial, catalogue, profile, groups, close, changed, openGroup
             : <button type="button" className="control primary" disabled={action.busy || !selectedGroups.length}
               onClick={() => void action.run(() => persist(true))}>Подати на перевірку</button>}
         </div>
-        {record && <button type="button" className="control danger-control" disabled={action.busy} onClick={() => {
+        {record && !revisionEditing && <button type="button" className="control danger-control" disabled={action.busy} onClick={() => {
           if (!window.confirm('Видалити чернетку разом із її вкладеннями?')) return
           void action.run(async () => {
             await api(recordPath(id), 'DELETE', { revision: record.revision })
@@ -355,22 +376,51 @@ function Editor({ initial, catalogue, profile, groups, close, changed, openGroup
             close()
           })
         }}>Видалити чернетку</button>}
+        {record && revisionEditing && <div className="actions">
+          <button type="button" className="control" disabled={action.busy} onClick={() => {
+            if (canLeave()) { setRevisionEditing(false); setSaved(''); action.clearError() }
+          }}>До поданої версії</button>
+          {record.changes_draft && <button type="button" className="control danger-control" disabled={action.busy} onClick={() => {
+            if (!window.confirm('Видалити приватну чернетку змін?')) return
+            void action.run(async () => {
+              stored(await api<Achievement>(recordPath(id) + 'changes/', 'DELETE', { revision: record.revision }))
+              setRevisionEditing(false)
+              setSaved('')
+            })
+          }}>Видалити чернетку змін</button>}
+        </div>}
       </form>
     </> : <>
       <ResultDetails record={record} />
-      <section className="portfolio-section"><h3>Одержувачі</h3>
-        <p>{groups.filter((group) => record.group_ids?.includes(group.id)).map((group) => group.name).join(', ') || 'Чинних одержувачів немає.'}</p>
+      <section className="portfolio-section">
+        {record.reviews?.length ? <GroupReviews reviews={record.reviews} detail /> : <p>Чинних одержувачів немає.</p>}
       </section>
       {showMaterials ? <EvidenceEditor record={record} limits={catalogue.upload_limits} changed={stored} close={() => setShowMaterials(false)} />
         : <section className="portfolio-section"><h3>Документи</h3><DocumentList record={record} /></section>}
       <Validation error={action.error} />
       {record.status === 'submitted' && <div className="actions">
+        {!showMaterials && <button className="control" disabled={action.busy} onClick={() => void action.run(async () =>
+          stored(await api<Achievement>(recordPath(id))))}><RefreshCw size={15} aria-hidden="true" /> Оновити рішення</button>}
         {!showMaterials && <button className="control primary" onClick={() => setShowMaterials(true)}>Додати підтвердження</button>}
         {!showMaterials && <button className="control" disabled={action.busy} onClick={() => void action.run(async () => {
+          const current = await api<Achievement>(recordPath(id))
+          stored(current)
+          const next = startingForm(current)
+          const savedText = current.changes_draft?.reply ?? ''
+          setReply(savedText)
+          setSavedReply(savedText)
+          setForm(next)
+          setBaseline(JSON.stringify(next))
+          setSaved('')
+          setRevisionEditing(true)
+          goToStep(0)
+        })}>{record.changes_draft ? 'Продовжити чернетку змін' : record.reviews?.some(({ status }) =>
+          status === 'clarify' || status === 'rejected') ? 'Виправити' : 'Підготувати зміни'}</button>}
+        {!showMaterials && record.can_withdraw &&
+          <button className="control" disabled={action.busy} onClick={() => void action.run(async () => {
           const value = await api<Achievement>(recordPath(id) + 'withdraw/', 'POST', { revision: record.revision })
           stored(value)
-          const next = { ...form, evidence: value.evidence, results_url: value.results_url,
-            group_ids: groups.length === 1 ? [groups[0].id] : [] }
+          const next = startingForm(value)
           setForm(next)
           setBaseline(JSON.stringify(next))
           setAllowDuplicate(false)
@@ -378,7 +428,9 @@ function Editor({ initial, catalogue, profile, groups, close, changed, openGroup
           goToStep(0)
         })}>Відкликати в чернетку</button>}
       </div>}
+      <History record={record} />
     </>}
+    {editable && !revisionEditing && record && <History record={record} />}
   </>
 }
 
@@ -392,23 +444,22 @@ function SavedEditor({ id, ...props }: Omit<Parameters<typeof Editor>[0], 'initi
   </>
 }
 
-export default function StudentAchievements({ openGroups }: { openGroups: () => void }) {
-  const records = useResource<{ records: RecordSummary[] }>('/api/achievements/')
+export default function StudentAchievements({ openGroups, initialId }: { openGroups: () => void; initialId?: string }) {
   const catalogue = useResource<Catalogue>('/api/catalogue/')
   const profile = useResource<Profile>('/api/profile/')
   const memberships = useResource<{ memberships: Membership[] }>('/api/memberships/')
   const groups = (memberships.data?.memberships ?? []).filter((item) => item.status === 'approved' && !item.group.archived).map((item) => item.group)
-  const [selected, setSelected] = useState<string>()
+  const [selected, setSelected] = useState(initialId)
   const [waiting, setWaiting] = useState(false)
+  const [visit, setVisit] = useState(0)
   const editorReady = Boolean(catalogue.data && profile.data && memberships.data)
-  const visible = (records.data?.records ?? []).filter((item) => !waiting || waitingForDocument(item))
   function open(id: string) {
     setSelected(id)
     window.scrollTo(0, 0)
   }
   if (selected && catalogue.data && profile.data && editorReady) {
     const props = { catalogue: catalogue.data, profile: profile.data, groups, openGroups,
-      close: () => setSelected(undefined), changed: records.refreshAfterWrite }
+      close: () => setSelected(undefined), changed: () => setVisit((value) => value + 1) }
     return selected === 'new' ? <Editor key="new" {...props} /> : <SavedEditor key={selected} id={selected} {...props} />
   }
   return <>
@@ -417,18 +468,11 @@ export default function StudentAchievements({ openGroups }: { openGroups: () => 
         <Plus size={16} aria-hidden="true" /> Нове досягнення
       </button>
     </header>
-    {[records, catalogue, profile, memberships].map((resource, index) =>
+    {[catalogue, profile, memberships].map((resource, index) =>
       <ErrorNotice key={index} error={resource.error} retry={resource.refresh} />)}
-    {!records.data && records.loading && <p role="status">Завантажуємо досягнення…</p>}
-    {Boolean(records.data?.records.length) && <label className="choice-list filter-choice">
+    <label className="choice-list filter-choice">
       <input type="checkbox" checked={waiting} onChange={(event) => setWaiting(event.target.checked)} /> Потрібно додати документ
-    </label>}
-    {records.data && !visible.length && <p className="hint">{waiting ? 'Немає записів з очікуваним документом.' : 'Ви ще не додали жодного досягнення.'}</p>}
-    <ul className="record-list portfolio-records">{visible.map((item) => <li key={item.id}>
-      <button className="group-row" disabled={!editorReady} onClick={() => open(item.id)}>
-        <span className="row-name"><strong>{recordTitle(item)}</strong><span>{[item.season, item.stage_name].filter(Boolean).join(' · ')}</span></span>
-        <RecordBadges record={item} /><ChevronRight size={15} aria-hidden="true" />
-      </button>
-    </li>)}</ul>
+    </label>
+    <PortfolioResults visit={String(visit)} document={waiting ? 'waiting' : ''} groups={groups} onOpen={open} disabled={!editorReady} />
   </>
 }

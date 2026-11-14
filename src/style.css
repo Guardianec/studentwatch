@@ -462,6 +462,30 @@ dialog::backdrop { background: #2b231e66; }
 .portfolio-form summary { cursor: pointer; }
 .profile-privacy { margin-block: 8px; }
 .profile-privacy summary { cursor: pointer; color: var(--accent); }
+.filter-search { display: flex; align-items: end; gap: 8px; margin-block: 12px; }
+.filter-search label { flex: 1; }
+.teacher-search { margin-inline: var(--gutter); max-width: 550px; }
+.review-filters { grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); }
+.portfolio-filters { margin-block: 12px; }
+.portfolio-counts { margin-block: 10px; }
+.portfolio-records .group-row { grid-template-columns: minmax(0, 1fr) 15px; }
+.portfolio-records .group-row > .row-name { grid-column: 1; grid-row: 1; }
+.portfolio-records .group-row > svg { grid-column: 2; grid-row: 1; }
+.portfolio-records .row-name > .record-badges { display: flex; }
+.group-reviews ul, .history-list { padding: 0; margin: 0; list-style: none; }
+.group-reviews li, .history-list > li { padding: 8px 0; overflow-wrap: anywhere; }
+.group-reviews li + li, .history-list > li + li { border-top: 1px solid var(--line); }
+.portfolio-records .group-reviews { padding: 0 10px; font-size: 13px; }
+.portfolio-records .group-reviews li { padding: 4px 0; }
+.portfolio-records > li:has(.group-reviews) { padding-bottom: 8px; border-bottom: 1px solid var(--line); }
+.portfolio-records > li:has(.group-reviews) .group-row { border-bottom: 0; }
+.history-list .actions, .decision-saved, .pagination { margin-block: 8px; }
+.review-history summary { cursor: pointer; color: var(--accent); }
+.review-history .latest-changes { margin-bottom: 10px; }
+.change-list { margin: 6px 0; display: grid; gap: 5px; }
+.change-list dt { color: var(--muted); font-size: 13px; }
+.change-list dd { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.decision-saved { padding: 8px; background: var(--surface); }
 @media (max-width: 660px) {
   .teacher-filters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .portfolio-records .group-row { grid-template-columns: minmax(0, 1fr) 15px; }

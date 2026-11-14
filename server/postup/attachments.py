@@ -18,7 +18,8 @@ from pypdf.errors import PyPdfError
 from .api import ApiError, endpoint, invalid, json_body, throttled
 from .models import Attachment, AttachmentContent, User
 from .portfolio import (
-    check_revision, event, get_record, lock_student, missing, record_data, require_editable_evidence, update_record, uuid_field,
+    check_revision, event, get_record, lock_student, missing, record_data, require_editable_evidence, reset_reviews,
+    update_record, uuid_field,
 )
 
 IMAGE_TYPES = {"JPEG": ("image/jpeg", ".jpg"), "PNG": ("image/png", ".png")}
@@ -145,13 +146,18 @@ def upload(request, record_id):
             total = Attachment.objects.filter(achievement__owner=request.user).aggregate(total=Sum("size"))["total"] or 0
             if total - (old.size if old else 0) + len(contents) > settings.ATTACHMENT_QUOTA:
                 invalid({"file": "Вичерпано ліміт місця для ваших документів."})
-            item = record.attachments.create(pk=attachment_id, filename=filename, size=len(contents), content_type=content_type)
+            record.materials_revision += 1
+            item = record.attachments.create(pk=attachment_id, filename=filename, size=len(contents), content_type=content_type,
+                                             added_revision=record.materials_revision)
             AttachmentContent.objects.create(attachment=item, data=contents)
             if old:
-                event(request.user, record, "attachment_removed", old.pk)
+                reset_reviews(record, request.user, attachment_id=old.pk)
+                event(request.user, record, "attachment_replaced", old.pk,
+                      details={"filename": old.filename, "replacement": item.filename})
                 old.delete()
-            event(request.user, record, "attachment_added", item.pk)
-            update_record(record, [])
+            else:
+                event(request.user, record, "attachment_added", item.pk, details={"filename": item.filename})
+            update_record(record, ["materials_revision"])
             return JsonResponse(record_data(record, request.user), status=201)
     except DatabaseError:
         raise ApiError("storage", "Документ не збережено. Повторіть завантаження.", 503) from None
@@ -166,10 +172,14 @@ def remove(request, record_id, attachment_id):
         record = get_record(request.user, record_id, lock=True)
         check_revision(data.get("revision"), record.revision)
         require_editable_evidence(record)
-        if not record.attachments.filter(pk=attachment_id).delete()[0]:
+        item = record.attachments.filter(pk=attachment_id).first()
+        if item is None:
             missing()
-        event(request.user, record, "attachment_removed", attachment_id)
-        update_record(record, [])
+        reset_reviews(record, request.user, attachment_id=attachment_id)
+        event(request.user, record, "attachment_removed", attachment_id, details={"filename": item.filename})
+        item.delete()
+        record.materials_revision += 1
+        update_record(record, ["materials_revision"])
         return JsonResponse(record_data(record, request.user))
 
 

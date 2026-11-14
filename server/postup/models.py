@@ -184,6 +184,11 @@ class Achievement(models.Model):
     evidence = models.CharField(max_length=10, choices=Evidence, blank=True)
     status = models.CharField(max_length=9, choices=Status, default=Status.DRAFT)
     revision = models.PositiveIntegerField(default=1)
+    version = models.PositiveIntegerField(default=0)
+    submission_count = models.PositiveIntegerField(default=0)
+    materials_revision = models.PositiveIntegerField(default=0)
+    link_revision = models.PositiveIntegerField(default=0)
+    changes_draft = models.JSONField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -205,10 +210,20 @@ class Achievement(models.Model):
             "score": str(self.score) if self.score is not None else None,
         }
 
+    def team_context(self):
+        return (self.competition_id, self.cycle_id, self.stage_id, self.competition_proposal,
+                self.season_proposal, self.stage_proposal, self.section, self.declared_team.casefold())
+
 
 class AchievementShare(models.Model):
     achievement = models.ForeignKey(Achievement, on_delete=models.CASCADE, related_name="shares")
     membership = models.ForeignKey(Membership, on_delete=models.CASCADE, related_name="achievement_shares")
+    status = models.CharField(max_length=9, choices=Achievement.Status, default=Achievement.Status.SUBMITTED)
+    revision = models.PositiveIntegerField(default=1)
+    first_version = models.PositiveIntegerField(default=1)
+    submitted_at = models.DateTimeField(null=True, db_index=True)
+    seen_materials = models.PositiveIntegerField(default=0)
+    decision = models.ForeignKey("AchievementEvent", null=True, blank=True, on_delete=models.PROTECT, related_name="+")
 
     class Meta:
         constraints = [models.UniqueConstraint(fields=["achievement", "membership"], name="one_share_per_membership")]
@@ -221,6 +236,7 @@ class Attachment(models.Model):
     content_type = models.CharField(max_length=24)
     size = models.PositiveIntegerField()
     created_at = models.DateTimeField(auto_now_add=True)
+    added_revision = models.PositiveIntegerField(default=0)
 
 
 class AttachmentContent(models.Model):
@@ -234,3 +250,8 @@ class AchievementEvent(models.Model):
     action = models.CharField(max_length=24)
     attachment_id = models.UUIDField(null=True)
     created_at = models.DateTimeField(auto_now_add=True)
+    version = models.PositiveIntegerField(default=0)
+    group = models.ForeignKey(StudyGroup, null=True, on_delete=models.SET_NULL, related_name="+")
+    request_id = models.UUIDField(null=True, unique=True)
+    details = models.JSONField(default=dict, blank=True)
+    read_at = models.DateTimeField(null=True)

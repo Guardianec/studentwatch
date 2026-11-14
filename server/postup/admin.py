@@ -6,7 +6,7 @@ from .models import (
     Achievement, Competition, CompetitionCategory, CompetitionCycle, CompetitionStage, ReleaseApproval,
     TeamParticipation, User,
 )
-from .portfolio import duplicate_key, event, update_record
+from .portfolio import duplicate_key, event, reset_reviews, update_record
 
 
 @admin.register(User)
@@ -51,7 +51,7 @@ class AchievementAdmin(admin.ModelAdmin):
     list_filter = ("status", "participation", "competition")
     search_fields = ("declared_team", "competition_proposal")
     readonly_fields = tuple(field.name for field in Achievement._meta.fields)
-    actions = ["link_team"]
+    actions = ["link_team", "revise_team_result"]
 
     def get_queryset(self, request):
         return super().get_queryset(request).exclude(status=Achievement.Status.DRAFT)
@@ -93,9 +93,43 @@ class AchievementAdmin(admin.ModelAdmin):
             for record in records:
                 if record.team_id != team.pk:
                     record.team = team
-                    update_record(record, ["team"])
+                    record.version += 1
+                    update_record(record, ["team", "version"])
+                    reset_reviews(record, request.user, all_groups=True)
                     event(request.user, record, "team_linked")
         self.message_user(request, "Зв’язок із командою підтверджено.")
 
     def has_link_team_permission(self, request):
         return self.has_change_permission(request) and request.user.has_perm("postup.add_teamparticipation")
+
+    @admin.action(description="Оновити командний результат за вибраним записом", permissions=["revise_team"])
+    def revise_team_result(self, request, queryset):
+        selected = list(queryset.values_list("pk", "team_id")[:2])
+        if len(selected) != 1 or not selected[0][1]:
+            self.message_user(request, "Виберіть один поданий запис зі встановленим зв’язком із командою.", messages.ERROR)
+            return
+        source_id, team_id = selected[0]
+        with transaction.atomic():
+            records = list(Achievement.objects.select_for_update().filter(team_id=team_id).order_by("pk"))
+            source = next((record for record in records if record.pk == source_id), None)
+            if source is None or source.status != Achievement.Status.SUBMITTED:
+                self.message_user(request, "Доступність запису змінилася. Оновіть список.", messages.ERROR)
+                return
+            team = TeamParticipation.objects.select_for_update().get(pk=team_id)
+            result = source.shared_result()
+            delta = {f"team_{key}": [team.result.get(key), result[key]]
+                     for key in ("kind", "award", "placement", "score") if team.result.get(key) != result[key]}
+            if not delta:
+                self.message_user(request, "Спільний результат уже збігається з вибраним записом.")
+                return
+            team.result = result
+            team.save(update_fields=["result"])
+            for record in records:
+                record.version += 1
+                update_record(record, ["version"])
+                reset_reviews(record, request.user, all_groups=True)
+                event(request.user, record, "team_result_changed", details={"changes": delta})
+        self.message_user(request, "Спільний результат оновлено. Пов’язані подання повернуто на перевірку.")
+
+    def has_revise_team_permission(self, request):
+        return self.has_change_permission(request) and request.user.has_perm("postup.change_teamparticipation")

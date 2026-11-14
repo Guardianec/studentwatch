@@ -8,7 +8,9 @@ import type { ReactNode } from 'react'
 export function RecordBadges({ record, teacher = false }: { record: RecordSummary; teacher?: boolean }) {
   const tone = { draft: 'draft', submitted: 'pending', verified: 'confirmed', clarify: 'clarify', rejected: 'clarify' }[record.status]
   return <span className="record-badges">
-    <span className={'record-status ' + tone}>{teacher && record.status === 'submitted' ? 'Не перевірено' : statuses[record.status]}</span>
+    {(record.status === 'draft' || !record.reviews?.length || teacher) &&
+      <span className={'record-status ' + tone}>{statuses[record.status]}</span>}
+    {record.has_changes_draft && <span className="record-status draft">Чернетка змін</span>}
     {(record.has_document || record.has_link) && <span className="record-status draft">Є підтвердження</span>}
     {waitingForDocument(record) && <span className="record-status pending">Документ очікується</span>}
   </span>
@@ -35,6 +37,10 @@ export function ResultDetails({ record }: {
     {record.participation === 'team' && <div className="portfolio-section">
       <h3>{record.team?.name || record.declared_team || 'Команда'}</h3>
       <p className="hint">{record.team ? 'Зв’язок зі спільним командним результатом підтверджено.' : 'Назву команди вказав учень.'}</p>
+      {record.team && <p className="preserve-lines">Спільний результат · {[
+        resultKinds[record.team.result.kind as keyof typeof resultKinds], record.team.result.award,
+        record.team.result.placement, record.team.result.score && record.team.result.score + ' бала',
+      ].filter(Boolean).join(' · ')}</p>}
       {record.declared_members && <p className="preserve-lines">Заявлений склад · {record.declared_members}</p>}
     </div>}
     {record.evidence && (record.evidence !== 'later' || !record.has_document) && <p className="hint">{evidenceKinds[record.evidence]}</p>}
@@ -42,14 +48,15 @@ export function ResultDetails({ record }: {
   </>
 }
 
-export function DocumentList({ record, onMissing, controls }: {
-  record: Pick<Achievement, 'id' | 'attachments'>; onMissing?: () => void; controls?: (item: Attachment) => ReactNode
+export function DocumentList({ record, onMissing, controls, seen }: {
+  record: Pick<Achievement, 'id' | 'attachments'>; onMissing?: () => void; controls?: (item: Attachment) => ReactNode; seen?: number
 }) {
   const action = useAction()
   return <>
     {!record.attachments.length && <p className="hint">Файлів поки немає.</p>}
     <ul className="member-list document-list">{record.attachments.map((item) => <li key={item.id}>
-      <span className="row-name"><strong>{item.filename}</strong><span>{Math.ceil(item.size / 1024)} КБ</span></span>
+      <span className="row-name"><strong>{item.filename}</strong><span>{Math.ceil(item.size / 1024)} КБ
+        {seen !== undefined && item.added_revision > seen && ' · Ще не переглянуто'}</span></span>
       <div className="actions">
         <button type="button" className="control" disabled={action.busy} onClick={() => void action.run(async () => {
           try {

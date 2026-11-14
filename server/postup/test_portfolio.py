@@ -139,7 +139,8 @@ class PortfolioTests(TestCase):
         for client in (self.teacher2, self.stranger):
             self.assertEqual(client.get(doc).status_code, 404)
         self.assertEqual(Client().get(doc).status_code, 401)
-        self.assertEqual(set(AchievementEvent.objects.values_list("action", flat=True)), {"created", "submitted", "attachment_added"})
+        self.assertEqual(set(AchievementEvent.objects.values_list("action", flat=True)),
+                         {"created", "submitted", "attachment_added", "access_granted"})
 
     def test_multi_group_visibility_ends_on_removal_and_does_not_resume_on_rejoin(self):
         item = self.create()
@@ -348,4 +349,5 @@ class PortfolioMigrationTests(TransactionTestCase):
             self.assertEqual(Competition.objects.count(), 7)
             self.assertEqual(Competition.objects.get(slug="icpc").name, "ICPC · QA")
         finally:
-            MigrationExecutor(connection).migrate(current)
+            final = MigrationExecutor(connection)
+            final.migrate(final.loader.graph.leaf_nodes())

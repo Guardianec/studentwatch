@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import { X } from 'lucide-react'
 import { read, ApiFailure, statusText, type MemberStatus } from './api'
 
@@ -10,12 +10,15 @@ export function useResource<T>(path: string, visit = '', privateView = false) {
   const [state, setState] = useState<{ data?: T; error?: ApiFailure; loading: boolean }>({ loading: true })
   const run = useRef<(afterPending?: boolean) => void>(() => {})
   const epoch = useRef(0)
+  const resourcePath = useRef(path)
   useEffect(() => {
     let active = true
     let pending = false
     let again = false
     let failed = false
-    setState({ loading: true })
+    const samePath = resourcePath.current === path
+    setState((previous) => samePath ? { ...previous, loading: true } : { loading: true })
+    resourcePath.current = path
     function load(afterPending = false) {
       if (!active) return
       if (pending) {
@@ -130,16 +133,19 @@ export function MemberBadge({ status }: { status: MemberStatus }) {
   return <span className={'record-status ' + tone}>{statusText[status]}</span>
 }
 
-export function Modal({ title, onClose, children, busy = false }: {
-  title: string; onClose: () => void; children: ReactNode; busy?: boolean
+export function Modal({ title, onClose, children, busy = false, beforeClose }: {
+  title: string; onClose: () => void; children: ReactNode; busy?: boolean; beforeClose?: () => boolean
 }) {
   const dialog = useRef<HTMLDialogElement>(null)
+  const titleId = useId()
   useEffect(() => { dialog.current?.showModal() }, [])
-  return <dialog ref={dialog} aria-labelledby="modal-title" onClose={onClose}
-    onCancel={(event) => { if (busy) event.preventDefault() }}>
+  return <dialog ref={dialog} aria-labelledby={titleId} onClose={onClose}
+    onCancel={(event) => { if (busy || beforeClose?.() === false) event.preventDefault() }}>
     <div className="dialog-top">
-      <h2 id="modal-title">{title}</h2>
-      <button className="icon-button" aria-label="Закрити" disabled={busy} onClick={() => dialog.current?.close()}>
+      <h2 id={titleId}>{title}</h2>
+      <button className="icon-button" aria-label="Закрити" disabled={busy} onClick={() => {
+        if (beforeClose?.() !== false) dialog.current?.close()
+      }}>
         <X size={20} aria-hidden="true" />
       </button>
     </div>
