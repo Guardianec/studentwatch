@@ -40,7 +40,7 @@ export type RecordInput = {
   result_kind: keyof typeof resultKinds; award: string; placement: string; score: string | null; description: string;
   results_url: string; evidence: keyof typeof evidenceKinds; group_ids?: number[];
 }
-export type RecordSummary = Pick<RecordInput, 'academic_year' | 'participation' | 'result_kind' | 'evidence' | 'competition_id'> & {
+export type RecordSummary = Pick<RecordInput, 'academic_year' | 'participation' | 'result_kind' | 'evidence' | 'competition_id' | 'starts_on'> & {
   id: string; student: Pick<Profile, 'id' | 'full_name'>; competition_name: string; season: string; stage_name: string;
   status: keyof typeof statuses; has_document: boolean; has_link: boolean; updated_at: string;
   version: number; resubmitted: boolean; category_id: number | null; result_label: string; reviews?: GroupReview[]; has_changes_draft?: boolean;
@@ -59,6 +59,7 @@ export type Notification = ReviewEvent & { record_id: string; read: boolean; com
 export const apiQuery = (path: string, params: Record<string, string>) =>
   path + '?' + new URLSearchParams(Object.entries(params).filter(([, value]) => value !== '')).toString()
 export const eventDate = (value: string) => new Intl.DateTimeFormat('uk-UA', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value))
+export const academicDate = (value: string) => new Intl.DateTimeFormat('uk-UA', { dateStyle: 'medium', timeZone: 'UTC' }).format(new Date(value))
 export const recordPath = (id: string) => '/api/achievements/' + id + '/'
 export const recordTitle = (record: Pick<RecordSummary, 'competition_name'>) => record.competition_name || 'Чернетка без назви'
 export const waitingForDocument = (record: RecordSummary) => record.evidence === 'later' && !record.has_document

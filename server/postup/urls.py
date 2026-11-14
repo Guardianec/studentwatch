@@ -2,7 +2,7 @@ from django.conf import settings
 from django.contrib import admin
 from django.urls import path
 
-from . import api, attachments, groups, portfolio, review
+from . import api, attachments, groups, portfolio, review, workspace
 
 urlpatterns = [
     path("admin/", admin.site.urls),
@@ -13,6 +13,9 @@ urlpatterns = [
     path("api/register/", api.register),
     path("api/profile/", portfolio.my_profile),
     path("api/students/<int:student_id>/profile/", portfolio.student_profile),
+    path("api/teacher/students/", workspace.students),
+    path("api/teacher/overview/", workspace.overview),
+    path("api/teacher/applications/", workspace.membership_inbox),
     path("api/catalogue/", portfolio.catalogue),
     path("api/achievements/", portfolio.achievements),
     path("api/achievements/queue/", review.queue),

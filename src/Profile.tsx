@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { api, desktop, type User } from './api'
 import { type Profile } from './portfolio'
-import { PortfolioResults } from './PortfolioResults'
+import { RouteLink } from './navigation'
 import { canLeave, ErrorNotice, FieldError, useAction, useResource, useUnsaved } from './ui'
 
 const suggested = ['Інформатика', 'ШІ', 'Математика', 'Дослідницькі роботи']
@@ -121,7 +121,7 @@ function ProfileForm({ profile, save, cancel }: {
   </form>
 }
 
-export function StudentProfile({ user, update, openRecord }: { user: User; update: (user: User) => void; openRecord: (id: string) => void }) {
+export function StudentProfile({ user, update }: { user: User; update: (user: User) => void }) {
   const profile = useResource<Profile>('/api/profile/')
   const [editing, setEditing] = useState(false)
   const [saved, setSaved] = useState(false)
@@ -144,18 +144,7 @@ export function StudentProfile({ user, update, openRecord }: { user: User; updat
     }} /> : <>
       <ProfileDetails profile={profile.data} />
       <section className="portfolio-section"><h3>Обліковий запис</h3><p className="hint">Логін · {user.username}</p></section>
-      <section className="portfolio-section"><h2>Портфоліо</h2><PortfolioResults onOpen={openRecord} /></section>
+      <RouteLink className="control profile-portfolio-link" to="/portfolio">Відкрити портфоліо</RouteLink>
     </>)}
-  </>
-}
-
-export function TeacherProfile({ id, groupId, openRecord }: { id: number; groupId?: number; openRecord: (id: string) => void }) {
-  const resource = useResource<Profile>('/api/students/' + id + '/profile/', '', true)
-  return <>
-    <ErrorNotice error={resource.error} retry={resource.refresh} />
-    {resource.loading && !resource.data && <p role="status">Завантажуємо профіль…</p>}
-    {resource.data && <><h2>{resource.data.full_name}</h2><ProfileDetails profile={resource.data} />
-      <section className="portfolio-section"><h3>Портфоліо</h3><PortfolioResults studentId={id} groupId={groupId} onOpen={openRecord} /></section>
-    </>}
   </>
 }

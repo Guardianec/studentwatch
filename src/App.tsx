@@ -39,7 +39,7 @@ function AuthForm({ invite, setInvite, onLogin }: {
 
   return <main className="standard-page auth-page">
     <header className="page-heading"><h1>{register ? 'Створити обліковий запис' : desktop ? 'Вхід для вчителя' : 'Вхід для учня'}</h1>
-      <p>{desktop ? 'Увійдіть, щоб переглянути свої групи та заявки.' : 'Увійдіть, щоб приєднатися до групи й перевіряти заявки.'}</p>
+      <p>{desktop ? 'Учні, їхні досягнення та ваші справи.' : 'Ваші конкурси, дослідження та результати в одному портфоліо.'}</p>
     </header>
     <form className="form" onSubmit={(event) => {
       event.preventDefault()

@@ -1,137 +1,106 @@
-import { useState } from 'react'
-import { RefreshCw } from 'lucide-react'
-import { academicYear, api, type InvitePreview, type Membership, type User } from './api'
+import { useEffect, useState } from 'react'
+import { Bell, BookOpen, FolderOpen, House, Plus, UserRound } from 'lucide-react'
+import { api, type Membership, type User } from './api'
+import { backRoute, detailRoute, Navigation, RouteLink, useHashRoute, useNavigation } from './navigation'
 import { StudentProfile } from './Profile'
 import StudentAchievements from './StudentAchievements'
+import StudentGroups from './StudentGroups'
+import StudentHome from './StudentHome'
 import { apiQuery, eventDate, type Notification, type PageInfo } from './portfolio'
 import { eventLabels } from './ReviewDetails'
-import { PageButtons } from './PortfolioResults'
-import { canLeave, ErrorNotice, FieldError, MemberBadge, useAction, useResource } from './ui'
+import { PageButtons, PortfolioResults } from './PortfolioResults'
+import { ErrorNotice, useAction, useResource } from './ui'
+
+const pages = {
+  home: { title: 'Головна', icon: House },
+  portfolio: { title: 'Портфоліо', icon: BookOpen },
+  groups: { title: 'Групи', icon: FolderOpen },
+  profile: { title: 'Профіль', icon: UserRound },
+  notifications: { title: 'Сповіщення', icon: Bell },
+}
 
 export default function Student({ user, update, invite, setInvite }: {
   user: User; update: (user: User) => void; invite: string; setInvite: (code: string) => void
 }) {
-  const pages = { groups: 'Мої групи', profile: 'Мій профіль', achievements: 'Мої досягнення', notifications: 'Сповіщення' }
-  const [page, setPage] = useState<keyof typeof pages>('groups')
-  const [record, setRecord] = useState<string>()
-  const [noticePage, setNoticePage] = useState(1)
+  const navigation = useHashRoute('/home')
+  const { path, route, params, navigate } = navigation
+  const [, current, id] = path.split('/')
+  const page = Object.hasOwn(pages, current) ? current as keyof typeof pages : 'home'
+  const detail = page === 'portfolio' && (id === 'new' || /^[a-f\d-]{36}$/i.test(id ?? ''))
+  const [recentSave, setRecentSave] = useState<{ id: string; message: string }>()
   const notices = useResource<{ unread: number; notifications: Notification[] } & PageInfo>(
-    apiQuery('/api/notifications/', { page: String(noticePage) }),
+    apiQuery('/api/notifications/', { page: page === 'notifications' ? params.get('page') || '1' : '1' }),
+    page === 'notifications' ? 'open' : '',
   )
   const noticeAction = useAction()
-  function navigate(next: typeof page) {
-    if (page !== next && canLeave()) {
-      setPage(next)
-      setRecord(undefined)
-      if (next === 'notifications') notices.refresh()
-      window.scrollTo(0, 0)
-    }
-  }
-  function openRecord(id: string) {
-    setRecord(id)
-    setPage('achievements')
+
+  useEffect(() => {
     window.scrollTo(0, 0)
-  }
+    document.getElementById('student-content')?.focus({ preventScroll: true })
+  }, [path])
+
   function markRead(item: Notification) {
     void noticeAction.run(async () => {
       await api('/api/notifications/' + item.id + '/read/', 'POST', {})
       notices.refreshAfterWrite()
     })
   }
-  return <main className="standard-page student-page">
+
+  const open = (recordId: string) => detailRoute('/portfolio/' + recordId, route)
+  return <Navigation.Provider value={navigation}><div className="student-frame">
+    <a href="#student-content" className="skip" onClick={(event) => { event.preventDefault(); document.getElementById('student-content')?.focus() }}>До вмісту</a>
     <nav className="student-nav" aria-label="Кабінет учня">
-      {(Object.keys(pages) as (keyof typeof pages)[]).map((id) => <button key={id}
-        aria-current={page === id ? 'page' : undefined} type="button" onClick={() => navigate(id)}>{pages[id]}
-        {id === 'notifications' && Boolean(notices.data?.unread) && ' · ' + notices.data?.unread}</button>)}
+      {(Object.keys(pages) as (keyof typeof pages)[]).map((key) => {
+        const { title, icon: Icon } = pages[key]
+        return <RouteLink key={key} aria-current={page === key ? 'page' : undefined} to={'/' + key}>
+          <Icon size={18} aria-hidden="true" /><span>{title}</span>
+          {key === 'notifications' && Boolean(notices.data?.unread) && <span className="student-unread">{notices.data?.unread}</span>}
+        </RouteLink>
+      })}
     </nav>
-    {page === 'groups' && <StudentGroups invite={invite} setInvite={setInvite} />}
-    {page === 'profile' && <StudentProfile user={user} update={update} openRecord={openRecord} />}
-    {page === 'achievements' && <StudentAchievements key={record ?? 'list'} initialId={record} openGroups={() => navigate('groups')} />}
-    {page === 'notifications' && <>
-      <header className="page-heading"><h1>Сповіщення</h1></header>
-      <ErrorNotice error={notices.error} retry={notices.refresh} />
-      <ErrorNotice error={noticeAction.error} />
-      {notices.loading && !notices.data && <p role="status">Завантажуємо сповіщення…</p>}
-      {notices.data?.notifications.length === 0 && <p>Повідомлень поки немає.</p>}
-      <ul className="record-list history-list">{notices.data?.notifications.map((item) => <li key={item.id}>
-        <strong>{item.competition} · {eventLabels[item.action]}</strong>
-        <p className="hint">{[item.group, eventDate(item.at), item.read ? 'Прочитане' : 'Нове'].filter(Boolean).join(' · ')}</p>
-        {item.details.comment && <p className="preserve-lines">{item.details.comment}</p>}
-        <div className="actions">
-          <button className="control" onClick={() => openRecord(item.record_id)}>Відкрити запис</button>
-          {!item.read && <button className="control" disabled={noticeAction.busy} onClick={() => markRead(item)}>Позначити прочитаним</button>}
-        </div>
-      </li>)}</ul>
-      {notices.data && <PageButtons data={notices.data} move={setNoticePage} />}
-    </>}
-  </main>
+    <main className="standard-page student-page view-enter" id="student-content" key={path} tabIndex={-1}>
+      {page === 'home' && <StudentHome user={user} invitation={Boolean(invite)} />}
+      {page === 'groups' && <StudentGroups invite={invite} setInvite={setInvite} />}
+      {page === 'profile' && <StudentProfile user={user} update={update} />}
+      {page === 'portfolio' && (detail ?
+        <StudentAchievements key={id} id={id} close={() => navigate(backRoute(params, '/portfolio'), true, false)}
+          initialNotice={recentSave?.id === id ? recentSave.message : undefined}
+          saved={(recordId, message) => {
+            if (id !== 'new') return
+            setRecentSave({ id: recordId, message })
+            navigate(detailRoute('/portfolio/' + recordId, backRoute(params, '/portfolio')), true, false)
+          }} openGroups={() => navigate('/groups')} /> : <StudentPortfolio />)}
+      {page === 'notifications' && <>
+        <header className="page-heading"><h1>Сповіщення</h1></header>
+        <ErrorNotice error={notices.error} retry={notices.refresh} />
+        <ErrorNotice error={noticeAction.error} />
+        {notices.loading && !notices.data && <p role="status">Завантажуємо сповіщення…</p>}
+        {notices.data?.notifications.length === 0 && <p className="empty">Повідомлень поки немає.</p>}
+        <ul className="academic-rows notification-list">{notices.data?.notifications.map((item) => <li key={item.id}>
+          <strong>{item.competition} · {eventLabels[item.action] ?? item.action}</strong>
+          <p className="hint">{[item.group, eventDate(item.at), item.read ? 'Прочитане' : 'Нове'].filter(Boolean).join(' · ')}</p>
+          {item.details.comment && <p className="preserve-lines">{item.details.comment}</p>}
+          <div className="actions">
+            <RouteLink className="control" to={open(item.record_id)}>Відкрити запис</RouteLink>
+            {!item.read && <button className="control" disabled={noticeAction.busy} onClick={() => markRead(item)}>Позначити прочитаним</button>}
+          </div>
+        </li>)}</ul>
+        {notices.data && <PageButtons data={notices.data} move={(noticePage) => navigation.update({ page: String(noticePage) })} />}
+      </>}
+    </main>
+  </div></Navigation.Provider>
 }
 
-function StudentGroups({ invite, setInvite }: { invite: string; setInvite: (code: string) => void }) {
-  const groups = useResource<{ memberships: Membership[] }>('/api/memberships/')
-  const joining = useAction()
-  const [preview, setPreview] = useState<{ code: string; result: InvitePreview }>()
-  const found = preview?.code === invite ? preview.result : undefined
-  const [submitted, setSubmitted] = useState(false)
-
-  async function lookup(submit: boolean) {
-    const result = await api<InvitePreview>('/api/join/', 'POST', { code: invite, submit })
-    setPreview({ code: invite, result })
-    if (submit && result.status === 'pending') {
-      setSubmitted(true)
-      setPreview(undefined)
-      setInvite('')
-      window.history.replaceState(null, '', window.location.pathname)
-      groups.refreshAfterWrite()
-    }
-  }
-
+function StudentPortfolio() {
+  const { route } = useNavigation()
+  const memberships = useResource<{ memberships: Membership[] }>('/api/memberships/')
+  const groups = (memberships.data?.memberships ?? []).filter((item) => item.status === 'approved' && !item.group.archived).map((item) => item.group)
   return <>
-    <header className="page-heading"><h1>Мої групи</h1><p>Запрошення та статуси ваших заявок.</p></header>
-    <section aria-labelledby="join-title" className="student-section">
-      <div className="section-heading"><h2 id="join-title">Приєднатися до групи</h2></div>
-      <form className="form" onSubmit={(event) => {
-        event.preventDefault()
-        setPreview(undefined)
-        setSubmitted(false)
-        void joining.run(() => lookup(false))
-      }}>
-        <label>Код запрошення
-          <input value={invite} onChange={(event) => { setInvite(event.target.value); setPreview(undefined); setSubmitted(false) }}
-            maxLength={80} required autoComplete="off" spellCheck={false}
-            disabled={joining.busy}
-            aria-invalid={Boolean(joining.error?.fields.code)}
-            aria-describedby={joining.error?.fields.code ? 'join-code-error' : 'join-hint'} />
-          <FieldError id="join-code-error" message={joining.error?.fields.code} />
-          <span className="hint" id="join-hint">Введіть код, який надіслав учитель.</span>
-        </label>
-        <button type="submit" className="control" disabled={joining.busy}>{joining.busy ? 'Перевіряємо…' : 'Знайти групу'}</button>
-      </form>
-      <ErrorNotice error={joining.error} />
-      {found && <div className="invite-preview">
-        <strong>{found.group.name}</strong><span className="hint">{academicYear(found.group.year)} навчальний рік</span>
-        {found.status && <MemberBadge status={found.status} />}
-        {found.status === 'rejected' && <p className="hint">Повторне подання до цієї групи недоступне. Зверніться до вчителя.</p>}
-        {(!found.status || found.status === 'removed') && <button className="control primary"
-          disabled={joining.busy} onClick={() => void joining.run(() => lookup(true))}>Подати заявку</button>}
-      </div>}
-      {submitted && <p role="status" className="invite-preview">Заявку подано. Поточний статус видно в розділі «Заявки та членство».</p>}
-    </section>
-
-    <section aria-labelledby="my-groups-title" className="student-section">
-      <div className="section-heading spaced"><h2 id="my-groups-title">Заявки та членство</h2>
-        <button className="control" onClick={groups.refresh} disabled={groups.loading}><RefreshCw size={15} aria-hidden="true" /> Оновити</button></div>
-      <ErrorNotice error={groups.error} retry={groups.refresh} />
-      {groups.loading && !groups.data && <p role="status">Завантажуємо заявки…</p>}
-      {groups.data?.memberships.length === 0 && <p className="hint">Ви ще не подали жодної заявки.</p>}
-      <ul className="member-list">
-        {groups.data?.memberships.map((item) => <li key={item.id}>
-          <span className="row-name"><strong>{item.group.name}</strong>
-            <span>{academicYear(item.group.year)}{item.group.archived ? ' · Архів' : ''}</span></span>
-          <MemberBadge status={item.status} />
-        </li>)}
-      </ul>
-    </section>
-
+    <header className="page-heading academic-heading"><div><h1>Портфоліо</h1>
+      <p>Результати, чернетки й відгуки вчителів.</p></div>
+      <RouteLink className="control primary" to={detailRoute('/portfolio/new', route)}><Plus size={17} aria-hidden="true" /> Додати досягнення</RouteLink>
+    </header>
+    <ErrorNotice error={memberships.error} retry={memberships.refresh} />
+    <PortfolioResults groups={groups} recordRoute={(item) => detailRoute('/portfolio/' + item.id, route)} />
   </>
 }

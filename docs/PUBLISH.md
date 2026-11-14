@@ -17,10 +17,10 @@ git diff --check
 git add -- .
 git diff --cached --stat
 git diff --cached --check
-git commit -m "Додати перевірку досягнень і портфоліо у 0.4.0"
+git commit -m "Додати академічний простір Поступу 0.4.1"
 git push origin main
 ```
 
-Якщо `main` захищена, створіть гілку `git switch -c codex/postup-0.4.0` перед комітом, відправте її командою `git push -u origin codex/postup-0.4.0` й відкрийте Pull Request у `main`. Злийте після зеленого **Pilot checks**. Якщо Git Credential Manager відкриє браузер, підтвердьте вхід до GitHub. [Репозиторій](https://github.com/Guardianec/studentwatch) · [GitHub Actions](https://github.com/Guardianec/studentwatch/actions)
+Якщо `main` захищена, створіть гілку `git switch -c codex/postup-0.4.1` перед комітом, відправте її командою `git push -u origin codex/postup-0.4.1` й відкрийте Pull Request у `main`. Злийте після зеленого **Pilot checks**. Якщо Git Credential Manager відкриє браузер, підтвердьте вхід до GitHub. [Репозиторій](https://github.com/Guardianec/studentwatch) · [GitHub Actions](https://github.com/Guardianec/studentwatch/actions)
 
-Після тестового онлайн-розгортання за потреби створіть тег `v0.4.0` і GitHub Release. Додайте зібраний із реальною HTTPS-адресою інсталятор як вкладення до Release. Перед оприлюдненням перевірте, кому має бути доступний інсталятор. [Керування GitHub Releases](https://docs.github.com/en/repositories/releasing-projects-on-github/managing-releases-in-a-repository)
+Після тестового онлайн-розгортання за потреби створіть тег `v0.4.1` і GitHub Release. Додайте зібраний із реальною HTTPS-адресою інсталятор як вкладення до Release. Перед оприлюдненням перевірте, кому має бути доступний інсталятор. [Керування GitHub Releases](https://docs.github.com/en/repositories/releasing-projects-on-github/managing-releases-in-a-repository)

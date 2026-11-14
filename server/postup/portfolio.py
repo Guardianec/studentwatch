@@ -110,7 +110,11 @@ def student_profile(request, student_id):
     ).select_related("academic_profile").first()
     if student is None:
         missing()
-    return JsonResponse(profile_data(student, getattr(student, "academic_profile", None) or AcademicProfile()))
+    groups = teacher_memberships(request.user).filter(student_id=student_id).order_by("group__name")
+    return JsonResponse(profile_data(student, getattr(student, "academic_profile", None) or AcademicProfile()) | {
+        "groups": [{"id": item.group_id, "name": item.group.name, "year": item.group.year}
+                   for item in groups.select_related("group")],
+    })
 
 
 def portfolio_user(user):
@@ -202,7 +206,7 @@ def summary(record):
         "has_document": record.has_document if hasattr(record, "has_document") else record.attachments.exists(),
         "has_link": bool(record.results_url),
         "result_kind": record.result_kind, "participation": record.participation,
-        "updated_at": record.updated_at, "version": record.version,
+        "starts_on": record.starts_on, "updated_at": record.updated_at, "version": record.version,
         "resubmitted": record.submission_count > 1,
         "result_label": record.award or record.placement or record.get_result_kind_display(),
     }

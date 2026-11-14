@@ -5,13 +5,12 @@ import { evidenceKinds, recordPath, resultKinds, statuses, waitingForDocument, t
 import { ErrorNotice, useAction } from './ui'
 import type { ReactNode } from 'react'
 
-export function RecordBadges({ record, teacher = false }: { record: RecordSummary; teacher?: boolean }) {
-  const tone = { draft: 'draft', submitted: 'pending', verified: 'confirmed', clarify: 'clarify', rejected: 'clarify' }[record.status]
+export function RecordBadges({ record }: { record: RecordSummary }) {
   return <span className="record-badges">
-    {(record.status === 'draft' || !record.reviews?.length || teacher) &&
-      <span className={'record-status ' + tone}>{statuses[record.status]}</span>}
+    {record.status === 'draft' && <span className="record-status draft">{statuses.draft}</span>}
+    {record.status !== 'draft' && !record.reviews?.length && <span className="record-status">Без чинних одержувачів</span>}
     {record.has_changes_draft && <span className="record-status draft">Чернетка змін</span>}
-    {(record.has_document || record.has_link) && <span className="record-status draft">Є підтвердження</span>}
+    {(record.has_document || record.has_link) && <span className="record-status draft">Є матеріали</span>}
     {waitingForDocument(record) && <span className="record-status pending">Документ очікується</span>}
   </span>
 }

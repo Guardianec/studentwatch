@@ -44,11 +44,15 @@ def filters(request, records, *, search_student):
     participation = params.get("participation")
     if participation in Achievement.Participation.values:
         records = records.filter(participation=participation)
+    if params.get("result_kind") in Achievement.Result.values:
+        records = records.filter(result_kind=params["result_kind"])
     for term in params.get("search", "").replace("\x00", "")[:120].split()[:8]:
         variants = {term, term.lower(), term.upper(), term.capitalize()}
         matching = Q()
         for spelling in sorted(variants):
-            matching |= Q(competition__name__icontains=spelling) | Q(competition_proposal__icontains=spelling)
+            matching |= (Q(competition__name__icontains=spelling) | Q(competition_proposal__icontains=spelling)
+                         | Q(stage_proposal__icontains=spelling) | Q(stage__name__icontains=spelling)
+                         | Q(award__icontains=spelling) | Q(placement__icontains=spelling) | Q(section__icontains=spelling))
             if search_student:
                 matching |= Q(owner__full_name__icontains=spelling)
         records = records.filter(matching)
@@ -91,18 +95,43 @@ def pagination(total, requested):
     return {"total": total, "page": page, "pages": pages}, slice(start, start + PAGE_SIZE)
 
 
+def record_rows(records, shares, ordering):
+    return records.select_related("owner", "competition", "cycle", "stage").prefetch_related(Prefetch(
+        "shares", shares.select_related("membership__group").order_by("membership__group_id"), to_attr="review_rows",
+    )).order_by(*ordering)
+
+
+def record_row(record, role):
+    for share in record.review_rows:
+        share.achievement = record
+    return summary(record) | {"reviews": [share_data(item) for item in record.review_rows],
+                              "has_changes_draft": role == User.Role.STUDENT and record.changes_draft is not None}
+
+
+def with_materials(records):
+    attachments = Attachment.objects.filter(achievement_id=OuterRef("pk"))
+    return records.annotate(has_document=Exists(attachments), latest_attachment=Subquery(
+        attachments.order_by("-added_revision").values("added_revision")[:1]))
+
+
 def portfolio_list(request, *, queue=False):
     role = portfolio_user(request.user)
     group = positive(request.GET.get("group"))
     requested = positive(request.GET.get("page")) or 1
     status = request.GET.get("status") or ("action" if queue else "")
-    attachments = Attachment.objects.filter(achievement_id=OuterRef("pk"))
-    visible = visible_achievements(request.user).annotate(has_document=Exists(attachments),
-        latest_attachment=Subquery(attachments.order_by("-added_revision").values("added_revision")[:1]))
-    records = filters(request, visible, search_student=queue)
+    visible = with_materials(visible_achievements(request.user))
+    records = filters(request, visible, search_student=role == User.Role.TEACHER)
     shares = matching_shares(request.user, group)
     scoped = status_filter(shares, status)
     if queue:
+        reason = request.GET.get("reason")
+        if reason == "materials":
+            scoped = scoped.filter(Q(achievement__link_revision__gt=F("seen_materials")) | Exists(
+                Attachment.objects.filter(achievement_id=OuterRef("achievement_id"), added_revision__gt=OuterRef("seen_materials"))))
+        elif reason == "revised":
+            scoped = scoped.filter(status=Status.SUBMITTED, achievement__submission_count__gt=1)
+        elif reason == "new":
+            scoped = scoped.filter(status=Status.SUBMITTED, achievement__submission_count__lte=1)
         items = scoped.filter(achievement__in=records).select_related(
             "membership__group", "achievement__owner", "achievement__competition", "achievement__cycle", "achievement__stage",
         ).annotate(
@@ -122,6 +151,12 @@ def portfolio_list(request, *, queue=False):
 
     if status == Status.DRAFT:
         records = records.filter(status=Status.DRAFT) if role == User.Role.STUDENT and not group else records.none()
+    elif status == "needs_student" and role == User.Role.STUDENT:
+        needs_attention = Q(status=Status.DRAFT) | Q(changes_draft__isnull=False) | Q(pk__in=shares.filter(
+            status__in=(Status.CLARIFY, Status.REJECTED)).values("achievement_id"))
+        if group:
+            records = records.filter(pk__in=shares.values("achievement_id"))
+        records = records.filter(needs_attention)
     elif group or status in (*Status.values, "action"):
         records = records.filter(status=Status.SUBMITTED, pk__in=scoped.values("achievement_id"))
     totals = records.aggregate(unique=Count("pk"), categories=Count("competition__category_id", distinct=True))
@@ -131,15 +166,11 @@ def portfolio_list(request, *, queue=False):
     else:
         # Keep the v0.3.0 list contract for existing Windows installations.
         page, window = {}, slice(None)
-    filtered = records.select_related("owner", "competition", "cycle", "stage").prefetch_related(Prefetch(
-        "shares", shares.select_related("membership__group").order_by("membership__group_id"), to_attr="review_rows",
-    )).order_by(F("starts_on").desc(nulls_last=True), "-created_at", "id")
-    rows = []
-    for record in filtered[window]:
-        for share in record.review_rows:
-            share.achievement = record
-        rows.append(summary(record) | {"reviews": [share_data(item) for item in record.review_rows],
-                                       "has_changes_draft": role == User.Role.STUDENT and record.changes_draft is not None})
+    sort = {"recent": ("-updated_at",), "oldest": (F("starts_on").asc(nulls_last=True), "created_at"),
+            "student": ("owner__full_name",), "competition": ("competition__name", "competition_proposal")}
+    ordering = sort.get(request.GET.get("sort"), (F("starts_on").desc(nulls_last=True), "-created_at"))
+    filtered = record_rows(records, shares, (*ordering, "id"))
+    rows = [record_row(record, role) for record in filtered[window]]
     return JsonResponse({"records": rows, "counts": totals, **page})
 
 

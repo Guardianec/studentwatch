@@ -1,28 +1,26 @@
 import { useEffect, useRef, useState } from 'react'
-import { ArrowLeft, Plus, RefreshCw } from 'lucide-react'
+import { ArrowLeft, RefreshCw } from 'lucide-react'
 import { academicYear, api, ApiFailure, type Group, type Membership } from './api'
 import { DocumentList, RecordBadges, ResultDetails } from './AchievementDetails'
 import { GroupReviews, History } from './ReviewDetails'
-import { PortfolioResults } from './PortfolioResults'
+import { currentYear } from './PortfolioResults'
 import {
-  evidenceKinds, recordPath, recordTitle, resultKinds,
+  academicDate, evidenceKinds, recordPath, recordTitle, resultKinds,
   type Achievement, type Attachment, type Catalogue, type Profile, type RecordInput, type UploadLimits,
 } from './portfolio'
 import { canLeave, ErrorNotice, useAction, useResource, useUnsaved } from './ui'
 
 type Recipient = Pick<Group, 'id' | 'name' | 'year' | 'archived'>
 type PendingFile = { id: string; file: File; replace?: Attachment }
-const steps = ['Конкурс', 'Результат', 'Підтвердження й доступ']
 const acceptedFiles = '.pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png'
 
-function newInput(profile: Profile, groups: Recipient[]): RecordInput {
-  const now = new Date()
+function newInput(profile: Profile): RecordInput {
   return {
-    competition_id: null, cycle_id: null, stage_id: null, competition_proposal: '', season_proposal: '', stage_proposal: '',
-    section: '', topic: '', starts_on: null, ends_on: null, academic_year: now.getFullYear() - Number(now.getMonth() < 8),
+    competition_id: null, cycle_id: null, stage_id: null, competition_proposal: '', season_proposal: academicYear(currentYear), stage_proposal: '',
+    section: '', topic: '', starts_on: null, ends_on: null, academic_year: currentYear,
     school: profile.school, grade: profile.grade, participation: 'solo', declared_team: '', declared_members: '',
     result_kind: 'participated', award: '', placement: '', score: null, description: '', results_url: '', evidence: '',
-    group_ids: groups.length === 1 ? [groups[0].id] : [],
+    group_ids: [],
   }
 }
 
@@ -152,14 +150,14 @@ function EvidenceEditor({ record, limits, changed, close }: {
   </form>
 }
 
-function Editor({ initial, catalogue, profile, groups, close, changed, openGroups }: {
+function Editor({ initial, catalogue, profile, groups, close, saved: onSaved, initialNotice, openGroups }: {
   initial?: Achievement; catalogue: Catalogue; profile: Profile; groups: Recipient[]; close: () => void;
-  changed: () => void; openGroups: () => void
+  saved: (id: string, message: string) => void; initialNotice?: string; openGroups: () => void
 }) {
   const [id] = useState(() => initial?.id ?? crypto.randomUUID())
   const [record, setRecord] = useState(initial)
   function startingForm(current?: Achievement): RecordInput {
-    const empty = newInput(profile, groups)
+    const empty = newInput(profile)
     if (!current) return empty
     const values = { ...current, ...current.changes_draft }
     return {
@@ -173,17 +171,24 @@ function Editor({ initial, catalogue, profile, groups, close, changed, openGroup
   const [reply, setReply] = useState(initial?.changes_draft?.reply ?? '')
   const [savedReply, setSavedReply] = useState(reply)
   const submitId = useRef(crypto.randomUUID())
-  const [step, setStep] = useState(0)
   const [files, setFiles] = useState<PendingFile[]>([])
   const [showMaterials, setShowMaterials] = useState(false)
-  const [saved, setSaved] = useState('')
+  const [competitionQuery, setCompetitionQuery] = useState('')
+  const [saved, setSaved] = useState(initialNotice ?? '')
   const [allowDuplicate, setAllowDuplicate] = useState(false)
-  const heading = useRef<HTMLHeadingElement>(null)
+  const formElement = useRef<HTMLFormElement>(null)
   const action = useAction()
   const editable = !record || record.status === 'draft' || revisionEditing
   const dirty = JSON.stringify(form) !== baseline || reply !== savedReply
   useUnsaved(editable && (dirty || files.length > 0))
-  useEffect(() => { heading.current?.focus({ preventScroll: true }) }, [step])
+  useEffect(() => {
+    const field = formElement.current?.querySelector<HTMLElement>('[aria-invalid="true"]')
+    if (field) {
+      const disclosure = field.closest('details')
+      if (disclosure) disclosure.open = true
+      field.focus()
+    }
+  }, [action.error])
   useEffect(() => {
     if (initial?.status === 'submitted' && !revisionEditing && !showMaterials) {
       setRecord((current) => current && initial.revision >= current.revision ? initial : current)
@@ -191,19 +196,16 @@ function Editor({ initial, catalogue, profile, groups, close, changed, openGroup
   }, [initial, revisionEditing, showMaterials])
 
   const competition = catalogue.categories.flatMap((category) => category.competitions).find((item) => item.id === form.competition_id)
+  const competitionOptions = catalogue.categories.map((category) => ({ ...category, competitions: category.competitions.filter((item) =>
+    item.id === form.competition_id || item.name.toLocaleLowerCase('uk').includes(competitionQuery.trim().toLocaleLowerCase('uk'))) }))
   const cycle = competition?.cycles.find((item) => item.id === form.cycle_id)
   const stage = cycle?.stages.find((item) => item.id === form.stage_id)
   const selectedGroups = groups.filter((group) => form.group_ids?.includes(group.id))
   const review = { ...form, competition_name: competition?.name ?? form.competition_proposal,
     season: cycle?.season ?? form.season_proposal, stage_name: stage?.name ?? form.stage_proposal, team: null }
   const patch = (values: Partial<RecordInput>) => { setForm((previous) => ({ ...previous, ...values })); setSaved('') }
-  const stored = (value: Achievement) => { setRecord(value); changed() }
+  const stored = setRecord
   const finishedFile = (finished: string) => setFiles((items) => items.filter((item) => item.id !== finished))
-  function goToStep(index: number) {
-    setStep(index)
-    window.scrollTo(0, 0)
-  }
-
   async function persist(submitting: boolean) {
     let current = record
     if (!current || dirty || (revisionEditing && !current.changes_draft)) {
@@ -224,50 +226,58 @@ function Editor({ initial, catalogue, profile, groups, close, changed, openGroup
       }))
       submitId.current = crypto.randomUUID()
       setRevisionEditing(false)
-      setSaved('Результат подано вибраним групам.')
-    } else setSaved('Чернетку збережено.')
+    }
+    const message = submitting ? 'Результат подано вибраним групам.' : 'Чернетку збережено.'
+    setSaved(message)
+    onSaved(id, message)
   }
 
   type TextField = { [Key in keyof RecordInput]-?: RecordInput[Key] extends string | null ? Key : never }[keyof RecordInput]
+  const fields = action.error?.fields ?? {}
   function text(key: TextField, label: string, maximum: number, example?: string, multiline = false) {
     const props = {
       value: form[key] ?? '', maxLength: maximum, placeholder: example,
-      'aria-invalid': Boolean(action.error?.fields[key]),
+      'aria-invalid': Boolean(fields[key]), 'aria-describedby': fields[key] ? 'achievement-' + key + '-error' : undefined,
       onChange: (event: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => patch({ [key]: event.target.value }),
     }
-    return <label>{label}{multiline ? <textarea {...props} rows={3} /> : <input {...props} />}</label>
+    return <label>{label}{multiline ? <textarea {...props} rows={3} /> : <input {...props} />}
+      {fields[key] && <span className="field-error" id={'achievement-' + key + '-error'}>{fields[key]}</span>}
+    </label>
   }
 
   return <>
     <button type="button" className="control portfolio-back" disabled={action.busy} onClick={() => { if (canLeave()) close() }}>
-      <ArrowLeft size={16} aria-hidden="true" /> До списку
+      <ArrowLeft size={16} aria-hidden="true" /> Назад
     </button>
     <header className="page-heading record-heading">
-      <div><h1>{editable ? (record ? 'Редагування чернетки' : 'Нове досягнення') : recordTitle(record)}</h1>
+      <div><h1>{editable ? (record ? 'Редагування чернетки' : 'Додати досягнення') : recordTitle(record)}</h1>
         {record && <RecordBadges record={{ ...record, has_changes_draft: Boolean(record.changes_draft) }} />}</div>
     </header>
     {saved && !editable && <p className="invite-preview" role="status">{saved}</p>}
     {editable ? <>
-      <ol className="achievement-steps" aria-label="Кроки внесення результату">
-        {steps.map((name, index) => <li key={name}><button className="control" type="button" aria-current={step === index ? 'step' : undefined}
-          disabled={action.busy} onClick={() => goToStep(index)}>{name}</button></li>)}
-      </ol>
-      <form className="form portfolio-form" noValidate onSubmit={(event) => event.preventDefault()}>
-        <h2 className="sr-only" tabIndex={-1} ref={heading}>{steps[step]}</h2>
-        {step === 0 && <fieldset disabled={action.busy}><legend>Відомості про конкурс</legend>
+      <form ref={formElement} className="form portfolio-form compact-editor" noValidate onSubmit={(event) => {
+        event.preventDefault()
+        if (selectedGroups.length) void action.run(() => persist(true))
+      }}>
+        <fieldset disabled={action.busy}><legend>Конкурс і дата</legend>
+          {catalogue.categories.reduce((total, category) => total + category.competitions.length, 0) > 10 &&
+            <label>Пошук конкурсу <input type="search" value={competitionQuery} onChange={(event) => setCompetitionQuery(event.target.value)} /></label>}
           <label>Конкурс
-            <select value={form.competition_id ?? ''} onChange={(event) => {
+            <select aria-invalid={Boolean(fields.competition_id)} aria-describedby={fields.competition_id ? "competition-error" : undefined} value={form.competition_id ?? ''} onChange={(event) => {
               const selected = catalogue.categories.flatMap(({ competitions }) => competitions).find(({ id }) => id === Number(event.target.value))
               patch({ competition_id: selected?.id ?? null, cycle_id: null, stage_id: null,
                 competition_proposal: '', stage_proposal: '', topic: '',
-                participation: selected?.team_by_default ? 'team' : form.participation })
+                participation: selected?.team_by_default ? 'team' : 'solo' })
             }}>
               <option value="">Немає у списку / ще не вибрано</option>
-              {catalogue.categories.map((category) => <optgroup label={category.name} key={category.id}>
+              {competitionOptions.filter((category) => category.competitions.length).map((category) => <optgroup label={category.name} key={category.id}>
                 {category.competitions.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
               </optgroup>)}
             </select>
+            {fields.competition_id && <span className="field-error" id="competition-error">{fields.competition_id}</span>}
           </label>
+          {competitionQuery && !competitionOptions.some((category) => category.competitions.length) &&
+            <p className="hint">За цією назвою конкурсів немає. Ви можете запропонувати назву.</p>}
           {!competition && text('competition_proposal', 'Запропонована назва конкурсу', 160)}
           {Boolean(competition?.cycles.length) && <label>Річний цикл
             <select value={form.cycle_id ?? ''} onChange={(event) => patch({ cycle_id: Number(event.target.value) || null, stage_id: null })}>
@@ -276,6 +286,7 @@ function Editor({ initial, catalogue, profile, groups, close, changed, openGroup
             </select>
           </label>}
           {!cycle && text('season_proposal', 'Сезон або рік конкурсу', 40, 'Наприклад, 2026 або 2026/27')}
+          {fields.cycle_id && <p className="field-error">{fields.cycle_id}</p>}
           {Boolean(cycle?.stages.length) && <label>Етап
             <select value={form.stage_id ?? ''} onChange={(event) => patch({ stage_id: Number(event.target.value) || null })}>
               <option value="">Вказати вручну або залишити порожнім</option>
@@ -283,37 +294,36 @@ function Editor({ initial, catalogue, profile, groups, close, changed, openGroup
             </select>
           </label>}
           {!stage && text('stage_proposal', 'Назва етапу, якщо відома', 120)}
-          {text('section', 'Секція, номінація або дисципліна', 120, 'Необов’язково')}
           {(competition?.asks_topic || form.topic) && text('topic', 'Тема дослідницької роботи', 200, 'Необов’язково')}
-          <div className="field-grid">
-            <label>Дата події
-              <input type="date" value={form.starts_on ?? ''} onChange={(event) => patch({ starts_on: event.target.value || null })} />
-            </label>
-            <label>Завершення, якщо це період
-              <input type="date" min={form.starts_on ?? undefined} value={form.ends_on ?? ''}
-                onChange={(event) => patch({ ends_on: event.target.value || null })} />
-            </label>
-          </div>
-          <label>Початок навчального року
-            <input type="number" min={2000} max={2099} value={form.academic_year ?? ''}
-              onChange={(event) => patch({ academic_year: event.target.value ? Number(event.target.value) : null })} />
-            <span className="hint">{form.academic_year ? academicYear(form.academic_year) : 'Наприклад, 2026 для 2026/27.'}</span>
+          <label>Дата події <span className="hint">Якщо відома</span>
+            <input type="date" value={form.starts_on ?? ''} aria-invalid={Boolean(fields.starts_on)} onChange={(event) => {
+              const date = event.target.value
+              if (!date) { patch({ starts_on: null }); return }
+              const [year, month] = date.split('-').map(Number)
+              const academic = year - Number(month < 9)
+              patch({ starts_on: date, academic_year: academic,
+                ...(form.season_proposal === academicYear(form.academic_year ?? currentYear) ? { season_proposal: academicYear(academic) } : {}) })
+            }} />
+            {fields.starts_on && <span className="field-error">{fields.starts_on}</span>}
           </label>
-          <details><summary>Заклад і клас на час результату</summary><div className="field-grid">
-            {text('school', 'Заклад освіти', 160)}{text('grade', 'Клас або рік навчання', 40)}
-          </div></details>
-        </fieldset>}
-        {step === 1 && <fieldset disabled={action.busy}><legend>Участь і результат</legend>
-          <label>Вид участі
-            <select value={form.participation} onChange={(event) => patch({ participation: event.target.value as RecordInput['participation'] })}>
-              <option value="solo">Індивідуальна</option><option value="team">Командна</option>
-            </select>
-          </label>
-          {form.participation === 'team' && <>
-            {text('declared_team', 'Назва команди', 120)}
-            {text('declared_members', 'Заявлений склад', 500, 'Необов’язково. Вказуйте імена за згодою учасників.', true)}
-            <p className="hint">Уповноважений адміністратор може зв’язати подані записи учасників у спільний результат.</p>
-          </>}
+          <details open={Boolean(fields.ends_on || fields.academic_year || fields.school || fields.grade || fields.section) || undefined}>
+            <summary>Додаткові відомості про подію</summary>
+            {text('section', 'Секція, номінація або дисципліна', 120)}
+            <div className="field-grid">
+              <label>Завершення події <input type="date" min={form.starts_on ?? undefined} value={form.ends_on ?? ''}
+                aria-invalid={Boolean(fields.ends_on)} onChange={(event) => patch({ ends_on: event.target.value || null })} />
+                {fields.ends_on && <span className="field-error">{fields.ends_on}</span>}
+              </label>
+              <label>Початок навчального року <input type="number" min={2000} max={2099} value={form.academic_year ?? ''}
+                aria-invalid={Boolean(fields.academic_year)}
+                onChange={(event) => patch({ academic_year: event.target.value ? Number(event.target.value) : null })} />
+                <span className="hint">{fields.academic_year ?? (form.academic_year ? academicYear(form.academic_year) : '')}</span>
+              </label>
+              {text('school', 'Заклад освіти', 160)}{text('grade', 'Клас або рік навчання', 40)}
+            </div>
+          </details>
+        </fieldset>
+        <fieldset disabled={action.busy}><legend>Результат</legend>
           <label>Вид результату
             <select value={form.result_kind} onChange={(event) => patch({ result_kind: event.target.value as RecordInput['result_kind'] })}>
               {Object.entries(resultKinds).map(([key, name]) => <option key={key} value={key}>{name}</option>)}
@@ -321,24 +331,29 @@ function Editor({ initial, catalogue, profile, groups, close, changed, openGroup
           </label>
           {(form.award || ['award', 'other'].includes(form.result_kind)) && text('award', 'Нагорода за протоколом', 120, 'Наприклад, диплом II ступеня')}
           {(form.placement || form.result_kind !== 'participated') && text('placement', 'Місце за протоколом', 80, 'Якщо відоме')}
-          <label>Бали <span className="hint">Якщо відомі</span>
-            <input value={form.score ?? ''} maxLength={24} inputMode="decimal" onChange={(event) => patch({ score: event.target.value })} />
-          </label>
-          {text('description', 'Що ви зробили', 1200, 'Короткий опис, необов’язково', true)}
-        </fieldset>}
-        {step === 2 && <>
-          <fieldset disabled={action.busy}><legend>Матеріали й одержувачі</legend>
-            <p className="hint">Диплом можна додати після подання. Учителі вибраних груп побачать результат і прикріплені матеріали.</p>
-            {revisionEditing ? <>
-              <p className="hint">Після подання нова версія замінить поточну в усіх вибраних групах. Цим групам потрібно перевірити результат знову. Групи, які ви знімете з вибору, втратять доступ.</p>
+          {(form.participation === 'team' || form.declared_team) && text('declared_team', 'Назва команди', 120)}
+          <details open={Boolean(fields.score || fields.description || fields.declared_members) || undefined}>
+            <summary>Участь, бали й опис</summary>
+            <label>Вид участі
+              <select value={form.participation} onChange={(event) => patch({ participation: event.target.value as RecordInput['participation'] })}>
+                <option value="solo">Індивідуальна</option><option value="team">Командна</option>
+              </select>
+            </label>
+            {form.participation === 'team' && text('declared_members', 'Заявлений склад', 500, 'Вказуйте імена за згодою учасників.', true)}
+            <label>Бали <input value={form.score ?? ''} maxLength={24} inputMode="decimal" aria-invalid={Boolean(fields.score)}
+              onChange={(event) => patch({ score: event.target.value })} />
+              {fields.score && <span className="field-error">{fields.score}</span>}
+            </label>
+            {text('description', 'Що ви зробили', 1200, 'Короткий опис, необов’язково', true)}
+          </details>
+        </fieldset>
+        <fieldset disabled={action.busy}><legend>Подання</legend>
+            {revisionEditing && <>
+              <p className="hint">Вибрані групи отримають нову версію. Якщо прибрати групу, вона втратить доступ.</p>
               <label>Що виправлено <span className="hint">Необов’язково</span>
                 <textarea value={reply} maxLength={600} rows={3} onChange={(event) => setReply(event.target.value)} />
               </label>
-            </> : <><MaterialsFields evidence={form.evidence} url={form.results_url} change={patch} />
-            <DocumentsEditor record={record} files={files} onFiles={setFiles} limits={catalogue.upload_limits} busy={action.busy} remove={(item) =>
-              record && void action.run(async () => stored(await api<Achievement>(
-                recordPath(id) + 'attachments/' + item.id + '/', 'DELETE', { revision: record.revision },
-              )))} /></>}
+            </>}
             <h3>Кому показати результат</h3>
             {groups.length ? <div className="choice-list" role="group" aria-label="Одержувачі">
               {groups.map((group) => <label key={group.id}><input type="checkbox" checked={selectedGroups.includes(group)} onChange={(event) =>
@@ -346,33 +361,40 @@ function Editor({ initial, catalogue, profile, groups, close, changed, openGroup
                   : selectedGroups.filter((item) => item.id !== group.id).map((item) => item.id) })} />
               {group.name} · {academicYear(group.year)}</label>)}
             </div> : <p className="hint">Збережіть чернетку й <button type="button" className="text-link inline-link" onClick={openGroups}>приєднайтеся до групи</button>.</p>}
-          </fieldset>
-          <section className="portfolio-section review-panel"><h2>Перегляд перед поданням</h2>
-            <h3>{recordTitle(review)}</h3>
-            <ResultDetails record={{ ...review, results_url: '', has_document: Boolean(record?.has_document || files.length) }} />
-            {form.results_url && <p className="hint">Посилання на результати · {form.results_url}</p>}
-            <p className="hint">Одержувачі · {selectedGroups.map(({ name }) => name).join(', ') || 'Ще не вибрані'}</p>
-          </section>
-          {(record?.duplicate || action.error?.code === 'duplicate') && <label className="choice-list duplicate-notice">
-            <span>У вас є схожий запис за цим конкурсом, сезоном, етапом і секцією.</span>
-            <span><input type="checkbox" checked={allowDuplicate} onChange={(event) => setAllowDuplicate(event.target.checked)} />
-              Це окремий результат</span>
-          </label>}
-        </>}
+            {fields.group_ids && <p className="field-error">{fields.group_ids}</p>}
+            {!revisionEditing && <details open={Boolean(fields.results_url || files.length) || undefined}>
+              <summary>Матеріали · необов’язково</summary>
+              <p className="hint">Диплом або посилання можна додати і після подання.</p>
+              <MaterialsFields evidence={form.evidence} url={form.results_url} change={patch} />
+              {fields.results_url && <p className="field-error">{fields.results_url}</p>}
+              <DocumentsEditor record={record} files={files} onFiles={setFiles} limits={catalogue.upload_limits} busy={action.busy} remove={(item) =>
+                record && void action.run(async () => stored(await api<Achievement>(
+                  recordPath(id) + 'attachments/' + item.id + '/', 'DELETE', { revision: record.revision },
+                )))} />
+            </details>}
+        </fieldset>
+        <details className="review-panel"><summary>Перегляд перед поданням</summary>
+          <h3>{recordTitle(review)}</h3>
+          <ResultDetails record={{ ...review, results_url: '', has_document: Boolean(record?.has_document || files.length) }} />
+          <p className="hint">Одержувачі · {selectedGroups.map(({ name }) => name).join(', ') || 'Ще не вибрані'}</p>
+        </details>
+        {(record?.duplicate || action.error?.code === 'duplicate') && <label className="choice-list duplicate-notice">
+          <span>У вас є схожий запис за цим конкурсом, сезоном, етапом і секцією.</span>
+          <span><input type="checkbox" checked={allowDuplicate} onChange={(event) => setAllowDuplicate(event.target.checked)} />
+            Це окремий результат</span>
+        </label>}
         <Validation error={action.error} />
         {saved && <p className="invite-preview" role="status">{saved}</p>}
-        <div className="actions wizard-actions">
-          {step > 0 && <button type="button" className="control" disabled={action.busy} onClick={() => goToStep(step - 1)}>Назад</button>}
+        <div className="actions editor-actions">
           <button type="button" className="control" disabled={action.busy} onClick={() => void action.run(() => persist(false))}>Зберегти чернетку</button>
-          {step < 2 ? <button type="button" className="control primary" disabled={action.busy} onClick={() => goToStep(step + 1)}>Далі</button>
-            : <button type="button" className="control primary" disabled={action.busy || !selectedGroups.length}
-              onClick={() => void action.run(() => persist(true))}>Подати на перевірку</button>}
+          <button type="submit" className="control primary" disabled={action.busy || !selectedGroups.length}>
+            {action.busy ? 'Зберігаємо…' : revisionEditing ? 'Повторно подати' : 'Подати досягнення'}
+          </button>
         </div>
         {record && !revisionEditing && <button type="button" className="control danger-control" disabled={action.busy} onClick={() => {
           if (!window.confirm('Видалити чернетку разом із її вкладеннями?')) return
           void action.run(async () => {
             await api(recordPath(id), 'DELETE', { revision: record.revision })
-            changed()
             close()
           })
         }}>Видалити чернетку</button>}
@@ -391,7 +413,7 @@ function Editor({ initial, catalogue, profile, groups, close, changed, openGroup
         </div>}
       </form>
     </> : <>
-      <ResultDetails record={record} />
+      <div className="result-lead"><strong>{record.result_label}</strong><span>{[record.stage_name, record.starts_on && academicDate(record.starts_on)].filter(Boolean).join(' · ')}</span></div>
       <section className="portfolio-section">
         {record.reviews?.length ? <GroupReviews reviews={record.reviews} detail /> : <p>Чинних одержувачів немає.</p>}
       </section>
@@ -413,7 +435,6 @@ function Editor({ initial, catalogue, profile, groups, close, changed, openGroup
           setBaseline(JSON.stringify(next))
           setSaved('')
           setRevisionEditing(true)
-          goToStep(0)
         })}>{record.changes_draft ? 'Продовжити чернетку змін' : record.reviews?.some(({ status }) =>
           status === 'clarify' || status === 'rejected') ? 'Виправити' : 'Підготувати зміни'}</button>}
         {!showMaterials && record.can_withdraw &&
@@ -425,9 +446,9 @@ function Editor({ initial, catalogue, profile, groups, close, changed, openGroup
           setBaseline(JSON.stringify(next))
           setAllowDuplicate(false)
           setSaved('Запис повернуто до чернеток.')
-          goToStep(0)
         })}>Відкликати в чернетку</button>}
       </div>}
+      <details className="portfolio-section"><summary>Відомості про результат</summary><ResultDetails record={record} /></details>
       <History record={record} />
     </>}
     {editable && !revisionEditing && record && <History record={record} />}
@@ -440,39 +461,24 @@ function SavedEditor({ id, ...props }: Omit<Parameters<typeof Editor>[0], 'initi
     <ErrorNotice error={resource.error} retry={resource.refresh} />
     {resource.loading && !resource.data && <p role="status">Завантажуємо досягнення…</p>}
     {resource.data ? <Editor initial={resource.data} {...props} /> :
-      <button className="control" onClick={props.close}>До списку</button>}
+      <button className="control" onClick={props.close}>Назад</button>}
   </>
 }
 
-export default function StudentAchievements({ openGroups, initialId }: { openGroups: () => void; initialId?: string }) {
+export default function StudentAchievements({ openGroups, id, close, saved, initialNotice }: {
+  openGroups: () => void; id: string; close: () => void; saved: (id: string, message: string) => void; initialNotice?: string
+}) {
   const catalogue = useResource<Catalogue>('/api/catalogue/')
   const profile = useResource<Profile>('/api/profile/')
   const memberships = useResource<{ memberships: Membership[] }>('/api/memberships/')
   const groups = (memberships.data?.memberships ?? []).filter((item) => item.status === 'approved' && !item.group.archived).map((item) => item.group)
-  const [selected, setSelected] = useState(initialId)
-  const [waiting, setWaiting] = useState(false)
-  const [visit, setVisit] = useState(0)
-  const editorReady = Boolean(catalogue.data && profile.data && memberships.data)
-  function open(id: string) {
-    setSelected(id)
-    window.scrollTo(0, 0)
-  }
-  if (selected && catalogue.data && profile.data && editorReady) {
-    const props = { catalogue: catalogue.data, profile: profile.data, groups, openGroups,
-      close: () => setSelected(undefined), changed: () => setVisit((value) => value + 1) }
-    return selected === 'new' ? <Editor key="new" {...props} /> : <SavedEditor key={selected} id={selected} {...props} />
+  if (catalogue.data && profile.data && memberships.data) {
+    const props = { catalogue: catalogue.data, profile: profile.data, groups, close, saved, initialNotice, openGroups }
+    return id === 'new' ? <Editor {...props} /> : <SavedEditor id={id} {...props} />
   }
   return <>
-    <header className="page-heading record-heading"><div><h1>Мої досягнення</h1></div>
-      <button className="control primary" disabled={!editorReady} onClick={() => open('new')}>
-        <Plus size={16} aria-hidden="true" /> Нове досягнення
-      </button>
-    </header>
     {[catalogue, profile, memberships].map((resource, index) =>
       <ErrorNotice key={index} error={resource.error} retry={resource.refresh} />)}
-    <label className="choice-list filter-choice">
-      <input type="checkbox" checked={waiting} onChange={(event) => setWaiting(event.target.checked)} /> Потрібно додати документ
-    </label>
-    <PortfolioResults visit={String(visit)} document={waiting ? 'waiting' : ''} groups={groups} onOpen={open} disabled={!editorReady} />
+    {(catalogue.loading || profile.loading || memberships.loading) && <p role="status">Завантажуємо форму…</p>}
   </>
 }
